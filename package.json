@@ -1,11 +1,11 @@
 {
   "name": "sovereign-pq-identity",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Post-Quantum Identity for Sovereign OS — pseudonymous identity + dual-signed receipts (Ed25519 + ML-DSA-44, FIPS 204). Offline-first, zero cloud.",
   "main": "cli.js",
   "type": "module",
   "scripts": {
-    "test": "node --test test/pq-identity.test.js",
+    "test": "node --test test/pq-identity.test.js test/vault.test.js",
     "selftest": "node cli.js selftest",
     "demo": "node cli.js demo",
     "ledger": "node cli.js ledger"

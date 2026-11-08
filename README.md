@@ -7,7 +7,7 @@
 
 [![Standard](https://img.shields.io/badge/Standard-FIPS_204_ML--DSA-fbbf24?style=for-the-badge&labelColor=030712)](https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.204.pdf)
 [![Zero Cloud](https://img.shields.io/badge/Cloud-ZERO-34d399?style=for-the-badge&labelColor=030712)](.)
-[![Tests](https://img.shields.io/badge/Tests-8_passing-22d3ee?style=for-the-badge&labelColor=030712)](#-ผลการทดสอบจากเครื่องจริง)
+[![Tests](https://img.shields.io/badge/Tests-14_passing-22d3ee?style=for-the-badge&labelColor=030712)](#-ผลการทดสอบจากเครื่องจริง)
 [![Node](https://img.shields.io/badge/Node.js-%E2%89%A520-43853d?style=for-the-badge&labelColor=030712)](./package.json)
 
 </div>
@@ -20,9 +20,10 @@
 git clone https://github.com/krisakornutama/sovereign-pq-identity.git
 cd sovereign-pq-identity
 npm install
-node cli.js demo        # สร้างตัวตน + ใบเสร็จสาธิต → เซ็นสองลายเซ็น → ตรวจ → ลงคลัง
-node cli.js selftest    # ทดสอบการบุกรุก 5 เคส (แก้ payload / ตัดลายเซ็น)
-npm test                # ชุดทดสอบเต็ม 8 เคส (ไม่ใช้เน็ต)
+node cli.js keygen "ชื่อเรียกเครื่อง"   # สร้างตัวตน + เก็บกุญแจใน Vault เข้ารหัส (ตั้ง passphrase ตอนถาม)
+node cli.js demo        # จำลองขาย → ถอดกุญแจจาก vault → เซ็นสองลายเซ็น → ตรวจ → ลงคลัง
+node cli.js selftest    # ทดสอบการบุกรุก 7 เคส (สลิป + vault)
+npm test                # ชุดทดสอบเต็ม 14 เคส (ไม่ใช้เน็ต)
 ```
 
 **เอาต์พุตจริงตอนรัน `node cli.js demo` (คัดจากเครื่องที่สร้างระบบนี้เอง):**
@@ -51,6 +52,7 @@ npm test                # ชุดทดสอบเต็ม 8 เคส (ไ�
 | 🌐 | **ตรวจย้อนจากเครื่องอื่นได้** | bytes ที่ถูกเซ็นคือ canonical JSON (เรียงคีย์แบบเสถียร) — verifier อีกเครื่องคำนวณซ้ำแล้วได้ผลลัพธ์เดียวกันเสมอ |
 | 💾 | **คลังใบเสร็จท้องถิ่น** | แฟ้ม JSONL + กันซ้ำตาม `id` (ยื่นใบเดิมซ้ำไม่เกิดรายการใหม่ — ระบบเดียวแบบ `sovereign-offgrid`) |
 | 🔒 | **Domain separation** | ลายเซ็น ML-DSA ผูก context `"sovereign-pq-receipt/v1"` — ลายเซ็นจากระบบอื่นใช้ต่อในแฟ้มของระบบนี้ไม่ได้ |
+| 🛡 | **Local Key Vault** | กุญแจ secret **ไม่เก็บ plaintext** — เก็บเป็น vault เข้ารหัส **Argon2id (RFC 9106) + AES-256-GCM** ถอดขึ้นหน่วยความจำเฉพาะตอนเซ็นสลิปเท่านั้น |
 
 ---
 
@@ -113,6 +115,42 @@ flowchart LR
 
 **เหตุผลเชิงความเสี่ยง (Harvest-now-decrypt-later ที่มาคู่ใบเสร็จ):** สลิปที่เก็บไว้ยาว ๆ วันหนึ่งอาจถูกแกะ Ed25519 ได้ด้วยเครื่องควอนตัม — ถ้ายังใช้ลายเซ็นชั้นเดียว สลิปจะถูกปลอมแปลงภายหลังได้อย่างเงียบ ๆ ระบบสองลายเซ็นนี้จึงเป็นการเตือนความปลอดภัยตั้งแต่ต้นวันธุรกรรม — ทั้งยังตรวจย้อนระยะยาวได้เสมอ (ความยาวกุญแจตรงมาตรฐาน FIPS 204: pk = 1,312 bytes · sk = 2,560 bytes · sig = 2,420 bytes)
 
+---
+
+## 🔐 Local Key Vault — กุญแจไม่เก็บ plaintext อีกต่อไป
+
+กุญแจ secret ถูกเข้ารหัสด้วย **Argon2id** (KDF กัน brute-force ตาม RFC 9106 · m=64 MiB t=3 p=1) → กุญแจ AES-256-GCM ปกป้องแฟ้ม vault — **passphrase ไม่ถูกเก็บที่ใดเลย** — ถอดกุญแจขึ้นหน่วยความจำชั่วคราวเฉพาะขณะเซ็นสลิปแล้วทิ้งพร้อมโปรแกรมปิด
+
+```bash
+# กรณีมีตัวตนแบบ plaintext เก่า (จาก v1.0) — migrate:
+node cli.js vault create        # ย้ายกุญแจ → vault + ตรวจเปิดกลับก่อนสำเร็จ
+node cli.js vault remove-plain   # ลบแฟ้ม plaintext (ตรวจว่า vault ยังเปิดได้ก่อนลบเสมอ)
+
+# ทดสอบเปิด vault ได้จริง (ขึ้น public view เท่านั้น ไม่โชว์ secret)
+node cli.js vault open
+```
+
+**เอาต์พุตจริงจากการ migrate บนเครื่องสร้างระบบ:**
+
+```
+$ node cli.js vault create
+ย้ายกุญแจจากแฟ้ม plaintext → vault เข้ารหัส (แฟ้ม plaintext จะยังอยู่ จนสร้าง vault สำเร็จ)
+✓ เตรียมเสร็จ: vault data/identity.vault.json ตรวจเปิดกลับผ่าน
+  ✍ ต่อไป: ลบแฟ้ม plaintext เอง หรือ run: node cli.js vault remove-plain
+
+$ node cli.js vault open
+✓ เปิด vault ได้จริง (กุญแจอยู่ในหน่วยความจำเฉพาะกระบวนการนี้)
+  ตัวตน : sps_86889d83f2f32d7ef2a7  ·  KDF: argon2id
+  กุญแจ public: Ed25519 MCowBQYDK2Vw… / ML-DSA-44 Aq1AcVZ4+H8g…
+
+$ node cli.js vault remove-plain
+✓ ลบแฟ้ม plaintext แล้ว — กุญแจอยู่ใน vault เข้ารหัสเท่านั้น
+```
+
+**สิ่งพิสูจน์แล้วจากการทดสอบ 1 จุดดี ๆ:** หลังลบแฟ้ม plaintext ทิ้งแล้ว ใบเสร็จ**เก่า**ที่เคยเซ็นไว้ยังตรวจผ่าน ✓ ทุกใบ — เพราะกุญแจสาธารณะถูกฝังในตัวใบเสร็จเอง (ใครถือแฟ้มสลิปตรวจได้ตลอดอายุไฟล์ ไม่จำเป็นต้องถือกุญแจของผู้เซ็น)
+
+> 💡 Automation ล้วน: กำหนด `SOVEREIGN_PASSPHRASE=...` (เฉพาะเซสชัน) แล้วคำสั่งทุกตัวไม่ถาม prompt — เหมาะ CI / สคริปต์เบื้องหลัง (ระวัง log แฟ้มประวัติคำสั่ง).
+
 **ข้อแตกต่างตรวจสอบมาแล้วจากโค้ดจริง:**
 
 - ปลอม payload แม้ 1 บิต → ทั้งสองลายเซ็นพังพร้อมกัน (bytes เดาไม่ได้)
@@ -134,8 +172,14 @@ $ npm test
 ✔ เอาลายเซ็นมาจากใบอื่นมาแปะ → ไม่ผ่าน
 ✔ id/issued_at อยู่ใน core bytes ที่เซ็น และลายเซ็นไม่หลุดเข้าฟีเจอร์เอง
 ✔ context ต้องตรงเดิม → ML-DSA verify ไม่ผ่าน
+✔ vault: ตัวตนเข้ารหัส→ถอดรหัสกลับได้ตรงกัน
+✔ vault: passphrase ผิด → ปฏิเสธ (ไม่เงียบมันเอง)
+✔ vault: แฟ้มถูกแก้ 1 บิต (ciphertext) → authTag ตรวจไม่ผ่าน
+✔ vault: มีพารามิเตอร์ Argon2id ในแฟ้ม (ตรวจสอบได้ตลอด)
+✔ vault → signReceipt: ถอดกุญแจจาก vault แล้วเซ็นได้ + ตรวจผ่านทั้งคู่
+✔ vault: passphrase สั้นเกิน 8 ตัว → ปฏิเสธตั้งแต่ตอนสร้าง
 
-ℹ tests 8 · pass 8 · fail 0
+ℹ tests 14 · pass 14 · fail 0
 ```
 
 ```
@@ -145,6 +189,8 @@ $ node cli.js selftest
   ✓ ลบลายเซ็น ML-DSA → ต้องไม่ผ่าน
   ✓ ลายเซ็น Ed25519 ตรวจแยกขั้น
   ✓ ลายเซ็น ML-DSA-44 ตรวจแยกขั้น
+  ✓ vault: เข้ารหัส→ถอดรหัส กลับได้ตรง
+  ✓ vault: passphrase ผิด → ต้องปฏิเสธ
 ```
 
 ---
@@ -166,7 +212,7 @@ repo นี้คือ**ชั้นตรวจสอบอัตลักษ�
 
 | เฟส | งาน | สถานะ |
 |---|---|---|
-| ✅ **เสร็จแล้ววันนี้** | ตัวตนนิรนาม + สองลายเซ็น (Ed25519 + ML-DSA-44) + คลัง idempotent + ทดสอบ 8/8 | พร้อมใช้ |
+| ✅ **เสร็จแล้ววันนี้** | ตัวตนนิรนาม + สองลายเซ็น (Ed25519 + ML-DSA-44) + คลัง idempotent + **Local Key Vault (Argon2id + AES-256-GCM)** + ทดสอบ 14/14 | พร้อมใช้ |
 | 🧩 **เฟส 2** | **ZK จริง: พิสูจน์โดยไม่เปิดเผยข้อมูล** (ZK-SNARK / ZK-STARK — ยืนยันสิทธิ์โดยไม่ต้องบอกว่าคุณคือใคร) | วางแผนถัดไป |
 | 🧊 **เฟส 3** | ลายเซ็นชุดเสริม (SLH-DSA / Falcon) + ระบบหมุนเวียนกุญแจอัตโนมัติ | วางแผน |
 | 🔊 **เฟส 4** | เข้ารหัสแบบด้าน ML-KEM (FIPS 203) สำหรับแฟ้มที่ส่งระหว่างโหนด | วางแผน |
@@ -175,7 +221,7 @@ repo นี้คือ**ชั้นตรวจสอบอัตลักษ�
 
 ## ⚠️ ความจริงระยะตรง — อ่านก่อนใช้จริง
 
-- 🔏 **กุญแจ secret เก็บเป็นแฟ้มข้อความปกติ (plaintext)** — วิธีทำให้ปลอดภัยวันนี้: ตั้งสิทธิ์แฟ้ม (`chmod 400` บน Unix) และเก็บไว้ในที่ส่วนตัวที่ไม่ถูกแชร์ — ถ้าต้องการ "กุญแจอยู่หลัง OS keychain" จะเป็นโค้ดต่อยอดถัดไป (macOS Keychain / Windows DPAPI / Linux Secret Service)
+- 🔏 **กุญแจ secret เก็บใน vault เข้ารหัสตั้งแต่ v1.1** — หากยังใช้แฟ้ม plaintext เก่า (v1.0) ให้ migrate ด้วย `node cli.js vault create` ตามด้วย `vault remove-plain` ทันที — ระบบขอ passphrase แบบพิมพ์ซ่อนอักษร · **ลืม passphrase = ไม่มีทางกู้คืนกุญแจ** (ตามหลัก vault: กุญแจเสีย ตัวตนต้องสร้างใหม่) ทางต่อยอดถัดไป: เชื่อม OS keychain (macOS Keychain / Windows DPAPI / Linux Secret Service)
 - 🌐 **บนเบราว์เซอร์ (Web Crypto) ยังไม่รองรับ ML-DSA** — ระบบนี้วิ่งบน Node.js เป็นหลัก ส่วนฝั่งเบราว์เซอร์จะต้องใส่ไลบรารี JS/WASM อีกชั้น (จะเพิ่มเป็นเวอร์ชันเสริม)
 - 🧪 **สำหรับภารกิจระดับธนาคาร/การแพทย์** — โค้ดระบบนี้เป็นระบบนำพิสูจน์แนวทาง; ก่อนนำไปใช้ระดับ production จริง ควรให้ผู้เชี่ยวชาญตรวจโค้ด (code audit) หรือใช้ liboqs เวอร์ชันที่ผ่านการตรวจแทน
 - 🧾 ทุกชิ้นรันในเครื่อง · **ไม่ส่งข้อมูลจากเครื่องออกไปที่ไหน** — `npm install` ต้องเน็ตครั้งเดียวตอนติดตั้ง; หลังจากนั้นระบบทำงาน offline 100%
