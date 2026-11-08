@@ -1,0 +1,20 @@
+{
+  "name": "sovereign-pq-identity",
+  "version": "1.0.0",
+  "description": "Post-Quantum Identity for Sovereign OS — pseudonymous identity + dual-signed receipts (Ed25519 + ML-DSA-44, FIPS 204). Offline-first, zero cloud.",
+  "main": "cli.js",
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/pq-identity.test.js",
+    "selftest": "node cli.js selftest",
+    "demo": "node cli.js demo",
+    "ledger": "node cli.js ledger"
+  },
+  "keywords": ["post-quantum", "ml-dsa", "ed25519", "zero-knowledge", "offline-first", "sovereign", "receipts", "fips-204"],
+  "author": "Krisakorn Utama <krisakornutama@users.noreply.github.com>",
+  "license": "MIT",
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "@noble/post-quantum": "^0.7.1"
+  }
+}
