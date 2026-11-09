@@ -8,7 +8,7 @@
 [![Standard](https://img.shields.io/badge/Standard-FIPS_204_ML--DSA-fbbf24?style=for-the-badge&labelColor=030712)](https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.204.pdf)
 [![Zero Cloud](https://img.shields.io/badge/Cloud-ZERO-34d399?style=for-the-badge&labelColor=030712)](.)
 [![ZK-SNARK](https://img.shields.io/badge/ZK--SNARK-Groth16_BN254-a855f7?style=for-the-badge&labelColor=030712)](#-️-zk-snark-anonymous-proof-v12--พิสูจน์ว่าเป็นสมาชิกโดยไม่บอกว่าใคร)
-[![Tests](https://img.shields.io/badge/Tests-21_passing-22d3ee?style=for-the-badge&labelColor=030712)](#-ผลการทดสอบจากเครื่องจริง)
+[![Tests](https://img.shields.io/badge/Tests-26_passing-22d3ee?style=for-the-badge&labelColor=030712)](#-ผลการทดสอบจากเครื่องจริง)
 [![Node](https://img.shields.io/badge/Node.js-%E2%89%A520-43853d?style=for-the-badge&labelColor=030712)](./package.json)
 
 </div>
@@ -24,13 +24,19 @@ npm install
 node cli.js keygen "ชื่อเรียกเครื่อง"   # สร้างตัวตน + เก็บกุญแจใน Vault เข้ารหัส (ตั้ง passphrase ตอนถาม)
 node cli.js demo        # จำลองขาย → ถอดกุญแจจาก vault → เซ็นสองลายเซ็น → ตรวจ → ลงคลัง
 node cli.js selftest    # ทดสอบการบุกรุก 7 เคส (สลิป + vault)
-npm test                # ชุดทดสอบเต็ม 21 เคส (ไม่ใช้เน็ต)
+npm test                # ชุดทดสอบเต็ม 26 เคส (ไม่ใช้เน็ต)
 
 # ZK-SNARK (v1.2) — พิสูจน์ว่าเป็นสมาชิกกลุ่ม โดยไม่บอกว่าใคร
 node cli.js zk enroll "กลุ่มซื้อฟาร์ม A"   # สมัครสมาชิก (กุญแจลับเข้า vault เข้ารหัสเท่านั้น)
 node cli.js zk tree                        # รวมรากกลุ่ม → data/members_root.json
 node cli.js zk prove "กลุ่มซื้อฟาร์ม A"    # สร้างใบพิสูจน์นิรนาม (nullifier กันใช้ซ้ำ)
 node cli.js zk verify data/zk-receipt-<epoch>.json   # ฝั่งผู้ตรวจ: ใช้ vkey เท่านั้น ไม่แตะกุญแจ
+
+# ZK-SNARK (v1.3) — พิสูจน์ "ยอด ≥ threshold" โดยไม่เปิดเผยยอดจริง
+node cli.js zk issue "แฟร์หลัก" 15600000     # ออกใบยอด 156,000.00 บาท (สตางค์) — ยอดเข้าคลังเข้ารหัสแฟ้มที่สอง
+node cli.js zk balance-tree                  # รากใบยอด → data/balances_root.json (issuer ประกาศให้ผู้ตรวจ)
+node cli.js zk prove-bal "แฟร์หลัก" 10000000 # พิสูจน์ "ยอด ≥ 100,000.00 บาท" → data/zk-balance-<epoch>.json
+node cli.js zk verify-bal data/zk-balance-<epoch>.json  # ฝั่งผู้ตรวจ: ไม่รู้ใคร ไม่รู้ยอด แต่ยืนยันข้ออ้างได้
 ```
 
 **เอาต์พุตจริงตอนรัน `node cli.js demo` (คัดจากเครื่องที่สร้างระบบนี้เอง):**
@@ -60,7 +66,8 @@ node cli.js zk verify data/zk-receipt-<epoch>.json   # ฝั่งผู้ต�
 | 💾 | **คลังใบเสร็จท้องถิ่น** | แฟ้ม JSONL + กันซ้ำตาม `id` (ยื่นใบเดิมซ้ำไม่เกิดรายการใหม่ — ระบบเดียวแบบ `sovereign-offgrid`) |
 | 🔒 | **Domain separation** | ลายเซ็น ML-DSA ผูก context `"sovereign-pq-receipt/v1"` — ลายเซ็นจากระบบอื่นใช้ต่อในแฟ้มของระบบนี้ไม่ได้ |
 | 🛡 | **Local Key Vault** | กุญแจ secret **ไม่เก็บ plaintext** — เก็บเป็น vault เข้ารหัส **Argon2id (RFC 9106) + AES-256-GCM** ถอดขึ้นหน่วยความจำเฉพาะตอนเซ็นสลิปเท่านั้น |
-| 🕶️ | **ZK-SNARK ยอมรับกลุ่มโดยไม่รู้ว่าใคร (v1.2)** | พิสูจน์ "อยู่ในกลุ่มสมาชิก" ต่อ POS/ผู้ตรวจด้วย **Groth16 + Poseidon Merkle + nullifier** — ผู้ตรวจไม่เห็นทั้งกุญแจและตำแหน่งในต้นไม้ ตรวจด้วย **vkey ล้วน** และกันใช้สิทธิ์ซ้ำรายคนต่อรอบ |
+| 🕶️ | **ZK-SNARK กลุ่มสมาชิก (v1.2)** | พิสูจน์ "อยู่ในกลุ่มสมาชิกที่ลงทะเบียน" ต่อ POS/ผู้ตรวจด้วย **Groth16 + Poseidon Merkle + nullifier** — ผู้ตรวจไม่เห็นทั้งกุญแจและตำแหน่งในต้นไม้ ตรวจด้วย **vkey ล้วน** และกันใช้สิทธิ์ซ้ำรายคนต่อรอบ |
+| 💰 | **ZK-SNARK ยอดเพียงพอ (v1.3)** | พิสูจน์ "**ยอด ≥ threshold ที่ผู้ตรวจประกาศ**" โดยไม่เปิดยอดจริง — ใบยอดออกโดย issuer ลงต้นไม้เดียวกัน (วงจร `balance.circom` ตรวจด้วย `LessEqThan(64)`) · ผู้ตรวจไม่รู้ใคร ไม่รู้ยอด กันใช้ซ้ำต่อใบต่อรอบและแยกโดเมนจากวงจรสมาชิกชัดเจน |
 
 ---
 
@@ -213,7 +220,7 @@ $ node cli.js zk verify data/zk-receipt-20261109.json     # ยื่นซ้�
 
 **ขั้นพิสูจน์จริงที่ไม่มีข้อมูลจำลอง:** prove โดยไม่มีกุญแจจาก vault ไม่ได้ผล (CLI ตรวจซ้ำว่า hash ของกุญแจ secret ตรง commitment ที่ลงทะเบียนไว้ก่อนลงมือพิสูจน์เสมอ) · แก้ `pi_c` 1 ค่า → verify false · กุญแจปลอม → วงจรปฏิเสธตั้งแต่ทำ witness · ตรวจย้อนข้ามเครื่องทั่วไปด้วยคำสั่งมาตรฐาน: `npx snarkjs groth16 verify artifacts/membership_vkey.json <public.json> <proof.json>` → `OK!`
 
-**การใช้แฟ้มวงจร**: ชุดที่ใช้แล้วบันทึกไว้ใน `artifacts/` ทั้งหมด (**`membership.wasm` 1.86 MB · `membership.zkey` 1.50 MB · `membership_vkey.json` 3.2 KB**) — ฝั่งผู้พิสูจน์ใช้ wasm+zkey ฝั่งผู้ตรวจต้องมี **vkey เท่านั้น** (ไม่ต้องมี zkey ไม่ต้องมีกุญแจสมาชิก)
+**การใช้แฟ้มวงจร**: ชุดที่ใช้แล้วบันทึกไว้ใน `artifacts/` ทั้งหมด (**`membership.wasm` 1.86 MB · `membership.zkey` 1.50 MB · `membership_vkey.json` 3.2 KB** และชุด balance ด้านล่าง) — ฝั่งผู้พิสูจน์ใช้ wasm+zkey ฝั่งผู้ตรวจต้องมี **vkey เท่านั้น** (ไม่ต้องมี zkey ไม่ต้องมีกุญแจสมาชิก)
 
 ### การสร้างแฟ้มวงจร (เมื่อต้องการออกวงจรใหม่หรือกลุ่มใหญ่ขึ้น — ทำครั้งเดียวต่อวงจร)
 
@@ -245,6 +252,92 @@ cp build/membership_final.zkey artifacts/membership.zkey
 
 ---
 
+## 💰 ZK-SNARK Balance Threshold Proof (v1.3) — พิสูจน์ว่ายอดเพียงพอ โดยไม่บอกยอด
+
+รุ่น v1.3 เพิ่มวงจรที่ 2 บนโครงเดียวกับ membership ทั้งชุด (Groth16 · Poseidon Merkle · nullifier): issuer ออก "ใบยอด" ลงต้นไม้ → ผู้ถือพิสูจน์ต่อผู้ตรวจว่า **"ยอดของใบนี้ ≥ threshold ที่ผู้ตรวจประกาศ"** — ผู้ตรวจไม่เห็นทั้งตัวตนผู้ถือและเลขยอดจริง
+
+**วงจรจริง:** `circuits/balance.circom` — คอมไพล์จาก circom 2.2.3 → **1,657 non-linear + 2,058 linear constraints** · ข้ออ้างหลักตรวจในวงจรด้วย `LessEqThan(64)` (จาก circomlib comparators — ผ่าน `Num2Bits(65)` ที่มาผูกช่วง 64 บิตของยอดควบคู่ไปด้วย) · leaf = Poseidon(balance, blinding, TAG_BAL=10) · node = Poseidon(L, R, TAG_NODE=0) เดียวกับสมาชิกเป๊ะ
+
+| ตัวแปรของวงจร | ฝั่งจากใคร | ผู้ตรวจเห็นได้เหลือเกิน |
+|---|---|---|
+| `balance` (สตางค์ 64 บิต) · `blinding` · `pathElements[4]` · `pathIndices[4]` | **private** — ยอดจริงไม่ออกจากเครื่องผู้พิสูจน์ | ✗ ไม่เห็นเลย |
+| `merkleRoot` (รากใบยอดที่ issuer ปิน) · `epochNonce` · `threshold` (ขั้นต่ำที่ประกาศ) | **public input** | ✓ เห็น |
+| `nullifierHash` = Poseidon(blinding, epoch, TAG_NULL_BAL=11) | **output สาธารณะ** | ✓ เห็น — จับใช้ซ้ำได้ แต่ดึงยอด/ตัวตนกลับไม่ได้ |
+
+แท็กโดเมน **10/11 เหลื่อมจากวงจรสมาชิก (1/2) โดยเจตนา** — ใบยอดกับ nullifier ยอดไม่มีทางทับค่าของวงจรอื่น (ทดสอบแยกโดเมนชัดในชุดเทส) · ยอดต่ำกว่า threshold วงจร**ปฏิเสธตั้งแต่คำนวณ witness** — ไม่มี proof ออกมาให้หลอก
+
+**เอาต์พุตจริงจาก CLI บนเครื่องสร้างระบบ (กระบวนการครบวงจร — ยอดหน่วยสตางค์):**
+
+```
+$ node cli.js zk issue "แฟร์หลัก" 15600000      # 156,000.00 บาท
+✓ คลังใบยอดสร้างใหม่ (เข้ารหัส Argon2id + AES-256-GCM — แยกจากคลังสมาชิก)
+✓ ออกใบยอด "แฟร์หลัก" สำเร็จ (ใบยอดที่ 0)
+  commitment (สาธารณะ): 0x271dc56eb24f215dc5e9…
+  (ทะเบียนไม่มีตัวเลขยอด — ยอดจริง + เหลื่อมสุ่มอยู่ใน data/balances.vault.json เข้ารหัสเท่านั้น)
+
+$ node cli.js zk issue "แฟร์ดอกไม้" 3000000     # 30,000.00 บาท
+✓ ออกใบยอด "แฟร์ดอกไม้" สำเร็จ (ใบยอดที่ 1)
+  commitment (สาธารณะ): 0xc87fa136d2ec9b2266b8…
+
+$ node cli.js zk issue-list
+ทะเบียนใบยอด 2/16:
+  [ใบยอดที่ 0]  commitment: 0x271dc56eb24f215dc5e9…
+  [ใบยอดที่ 1]  commitment: 0xc87fa136d2ec9b2266b8…
+
+$ node cli.js zk balance-tree
+✓ รากใบยอด (merkleRoot): 0xd01e2c338813774a7d2a191d…
+  2 ใบจากความจุ 16 (ช่องว่างเติมด้วยค่า 0 ครบทุกชั้น)
+
+$ node cli.js zk prove-bal "แฟร์หลัก" 10000000
+พิสูจน์ "ยอด ≥ 10000000 สตางค์" (ยอดจริงอยู่ในวงจรเท่านั้น ไม่กลายเป็นข้อมูลสาธารณะ)…
+✓ พิสูจน์สำเร็จ → data/zk-balance-20261109.json
+  ใบพิสูจน์  : pqri_thr_638c0f42  ·  ข้ออ้าง: ยอด ≥ 10000000 สตางค์  ·  epoch: 20261109
+  nullifier : 0x638c0f42f946278e…  (ผู้ตรวจบันทึก — ไม่รู้ว่าใคร ไม่รู้ยอด)
+  ราก       : 0xd01e2c338813774a…
+
+$ node cli.js zk prove-bal "แฟร์ดอกไม้" 10000000    # ยอดจริง 3,000,000 สตางค์ < ขั้นต่ำ
+✗ ยอดของ "แฟร์ดอกไม้" ต่ำกว่า threshold ที่ประกาศ (10000000 สตางค์) — วงจรไม่ยอมพิสูจน์ข้ออ้างลวง   (exit 1)
+
+$ node cli.js zk verify-bal data/zk-balance-20261109.json
+✓ ใบพิสูจน์ยอดถูกต้อง (vkey ตรวจผ่าน · ทั้งตัวตนและยอดจริงไม่ถูกเปิดเผย)
+  ข้ออ้าง    : ยอด ≥ 10000000 สตางค์ (มัดจำใน proof เท่านั้น)
+  nullifier : 0x638c0f42f946278e…  → บันทึกกันซ้ำแล้ว (1 รายการ)
+
+$ node cli.js zk verify-bal data/zk-balance-20261109.json    # ยื่นซ้ำ
+✗ สิทธิ์ยอดรอบนี้ถูกใช้ไปแล้ว (nullifier ซ้ำ) — ปฏิเสธแม้ proof ยังถูกต้องตามวงจร   (exit 1)
+
+$ node cli.js zk verify data/zk-balance-20261109.json        # ส่งใบยอดไปที่เครื่องตรวจวงจรสมาชิก
+แฟ้มไม่ใช่ใบพิสูจน์ ZK วงจร membership ของระบบนี้   (exit 1)
+```
+
+**โครงใบพิสูจน์จริง (ตัด proof ยาว — publicSignals คือสิ่งเดียวที่ส่งผู้ตรวจ):**
+
+```json
+{
+  "receiptId": "pqri_thr_638c0f42",
+  "authMode": "zk-snark-groth16",
+  "circuit": "balance_v1",
+  "threshold": "10000000",
+  "zkProof": { "pi_a": ["…"], "pi_b": [["…"]], "pi_c": ["…"] },
+  "publicSignals": {
+    "merkleRoot": "0xd01e2c338813774a7d2a191d…",
+    "nullifierHash": "0x638c0f42f946278e…",
+    "epochNonce": "20261109",
+    "threshold": "10000000"
+  }
+}
+```
+
+**ข้อจำกัดของวงจรที่ 2 (ตามความจริง):**
+
+- 📌 **issuer ต้องปินราก** — `data/balances_root.json` คือข้อตกลงเดียวระหว่าง issuer กับผู้ตรวจ ออกใบใหม่หลังปิน = รากใหม่ ต้องประกาศใหม่ให้ผู้ตรวจทุกครั้ง (ใบนอกรากที่ผู้ตรวจถือ = ปฏิเสธแน่นอน)
+- 🪙 **หน่วยเป็นสตางค์และจำกัด 64 บิต** — สูงสุด 18,446,744,073,709,551,615 สตางค์ต่อใบ (≈ ฿184 ล้านสี่ร้อยล้าน) ป้อนเกินช่วง CLI ปฏิเสธก่อนถึงวงจร
+- 🧮 **ความจุ 16 ใบต่อราก** (ลึกเท่าวงจรสมาชิก D=4) — ใบเกินต้องออกวงจรลึกขึ้นและ setup ใหม่ทั้งชุด
+- 🗂 **คลัง nullifier เดียวกัน สองโดเมน** — `data/nullifiers.jsonl` รวมทั้งสองวงจร (ระบุ `circuit` ในแต่ละรายการ) ค่า nullifier ต่างวงจรมาจากโดเมนต่างกัน (แท็ก 2/11) จึงไม่ปนกัน
+- 🔁 **1 ใบ = 1 สิทธิ์ / 1 epoch** — ใบต่างกัน (ยอดต่างกัน) แยกสิทธิ์ได้อิสระ แต่ใบเดียวยื่นซ้ำรอบเดิมได้รายการเดียว
+
+---
+
 ## ✅ ผลการทดสอบจากเครื่องจริง
 
 ```
@@ -270,8 +363,13 @@ $ npm test
 ✔ zk: แก้ proof 1 บิต → ตรวจไม่ผ่าน
 ✔ zk: สมาชิกที่ไม่อยู่ในกลุ่ม → วงจรปฏิเสธที่ witness (ไม่มี proof ออกมา)
 ✔ zk: nullifier เดียวกันใช้ซ้ำรอบเดียวกัน = ตรวจพบ (double-claim)
+✔ zk-balance: พิสูจน์ "ยอด ≥ threshold" จริง → ตรวจผ่าน และยอดจริงไม่โผล่ที่สาธารณะ
+✔ zk-balance: ยอด < threshold → วงจรปฏิเสธที่ witness (ไม่มี proof ออกมาให้หลอก)
+✔ zk-balance: แก้ threshold ใน publicSignals → ตรวจไม่ผ่าน (proof ผูกข้ออ้างตายตัว)
+✔ zk-balance: leaf ไม่ตรงกลุ่มของ issuer (เหลื่อมสุ่มอีกชุด) → วงจรปฏิเสธ
+✔ zk-balance: แท็กโดเมนแยกชัด — nullifier วงจรยอดไม่ทับ nullifier สมาชิกแม้ค่าลับเท่ากัน
 
-ℹ tests 21 · pass 21 · fail 0 · duration 4.3 s
+ℹ tests 26 · pass 26 · fail 0 · duration 5.5 s
 ```
 
 ```
@@ -305,9 +403,9 @@ repo นี้คือ**ชั้นตรวจสอบอัตลักษ�
 | เฟส | งาน | สถานะ |
 |---|---|---|
 | ✅ **v1.0–v1.1** | ตัวตนนิรนาม + สองลายเซ็น (Ed25519 + ML-DSA-44) + คลัง idempotent + **Local Key Vault (Argon2id + AES-256-GCM)** | พร้อมใช้ |
-| ✅ **v1.2 — บังเกตุจากเครื่องจริง** | **ZK-SNARK Anonymous Membership** — วงจรจริง Groth16 (Poseidon Merkle + nullifier กันใช้ซ้ำ) · CLI `zk enroll/list/tree/prove/verify` · ตรวจด้วย vkey ล้วน · 21/21 ทดสอบ | พร้อมใช้ |
-| 🧩 **เฟสถัดไป** | **Balance Threshold Proof** — พิสูจน์ว่ายอด/สิทธิ์เพียงพอโดยไม่เผยตัวเลขจริง (ต่อยอดวงจรเดียวกัน) | วางแผน |
-| 🧊 **เฟส 3** | ลายเซ็นชุดเสริม (SLH-DSA / Falcon) + ระบบหมุนเวียนกุญแจอัตโนมัติ | วางแผน |
+| ✅ **v1.2 — บังเกตุจากเครื่องจริง** | **ZK-SNARK Anonymous Membership** — วงจรที่ 1 Groth16 (Poseidon Merkle + nullifier กันใช้ซ้ำ) · CLI `zk enroll/list/tree/prove/verify` · ตรวจด้วย vkey ล้วน | พร้อมใช้ |
+| ✅ **v1.3 — บังเกตุจากเครื่องจริง** | **ZK-SNARK Balance Threshold** — วงจรที่ 2 `balance.circom` (LessEqThan 64 บิต · ยอด/กุญแจลับทั้งชุด ไม่เปิดยอดจริง) · CLI `zk issue/issue-list/balance-tree/prove-bal/verify-bal` · 26/26 ทดสอบ | พร้อมใช้ |
+| 🧩 **เฟสถัดไป** | **ลายเซ็นชุดเสริม (SLH-DSA / Falcon)** + ระบบหมุนเวียนกุญแจอัตโนมัติ | วางแผน |
 | 🔊 **เฟส 4** | เข้ารหัสแบบด้าน ML-KEM (FIPS 203) สำหรับแฟ้มที่ส่งระหว่างโหนด | วางแผน |
 
 ---
@@ -315,7 +413,7 @@ repo นี้คือ**ชั้นตรวจสอบอัตลักษ�
 ## ⚠️ ความจริงระยะตรง — อ่านก่อนใช้จริง
 
 - 🔏 **กุญแจ secret เก็บใน vault เข้ารหัสตั้งแต่ v1.1** — หากยังใช้แฟ้ม plaintext เก่า (v1.0) ให้ migrate ด้วย `node cli.js vault create` ตามด้วย `vault remove-plain` ทันที — ระบบขอ passphrase แบบพิมพ์ซ่อนอักษร · **ลืม passphrase = ไม่มีทางกู้คืนกุญแจ** (ตามหลัก vault: กุญแจเสีย ตัวตนต้องสร้างใหม่) ทางต่อยอดถัดไป: เชื่อม OS keychain (macOS Keychain / Windows DPAPI / Linux Secret Service)
-- 🕶️ **ระดับ ZK-SNARK (v1.2)** — กุญแจลับสมาชิกอยู่ใน vault เข้ารหัสแยกชุดเดียวกัน (`data/membership.vault.json` · passphrase แยกต่างจากตัวตน) · trusted setup สร้างแน่ในเครื่องเดียวและกลุ่มจำกัด 16 สมาชิกต่อราก — รายละเอียดข้อจำกัดฉบับเต็มอยู่ในหัวข้อ ZK ข้างบน; แฟ้มทะเบียนสมาชิกที่ส่งผู้ตรวจ (`members.json` + `members_root.json`) **ไม่มีข้อมูลลับใด ๆ**
+- 🕶️ **ระดับ ZK-SNARK (v1.2–v1.3)** — กุญแจลับสมาชิกอยู่ใน `data/membership.vault.json` · ยอดจริงของใบยอดอยู่ใน `data/balances.vault.json` — **สองคลังเข้ารหัสแยกกัน passphrase แยกกัน** (automation: `SOVEREIGN_MEMBER_PASS` / `SOVEREIGN_BALANCE_PASS`) · trusted setup สร้างในเครื่องเดียวและกลุ่มจำกัด 16 ต่อรากทั้งสองวงจร — รายละเอียดข้อจำกัดฉบับเต็มอยู่ในหัวข้อ ZK ข้างบน; แฟ้มสาธารณะที่ส่งผู้ตรวจ (`members.json` · `members_root.json` · `issued_balances.json` · `balances_root.json`) **ไม่มีข้อมูลลับใด ๆ**
 - 🌐 **บนเบราว์เซอร์ (Web Crypto) ยังไม่รองรับ ML-DSA** — ระบบนี้วิ่งบน Node.js เป็นหลัก ส่วนฝั่งเบราว์เซอร์จะต้องใส่ไลบรารี JS/WASM อีกชั้น (จะเพิ่มเป็นเวอร์ชันเสริม)
 - 🧪 **สำหรับภารกิจระดับธนาคาร/การแพทย์** — โค้ดระบบนี้เป็นระบบนำพิสูจน์แนวทาง; ก่อนนำไปใช้ระดับ production จริง ควรให้ผู้เชี่ยวชาญตรวจโค้ด (code audit) หรือใช้ liboqs เวอร์ชันที่ผ่านการตรวจแทน
 - 🧾 ทุกชิ้นรันในเครื่อง · **ไม่ส่งข้อมูลจากเครื่องออกไปที่ไหน** — `npm install` ต้องเน็ตครั้งเดียวตอนติดตั้ง; หลังจากนั้นระบบทำงาน offline 100%

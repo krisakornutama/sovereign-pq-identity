@@ -1,8 +1,9 @@
 // ต้นไม้ Merkle ของสมาชิก — ใช้ Poseidon (BN254) เหมือนกับวงจรเป๊ะ
 // แยกโดเมนด้วยแท็ก: leaf = P([secret, TAG_LEAF, 0]) · node = P([left, right, TAG_NODE]) · nullifier = P([secret, epoch, TAG_NULL])
+// วงจร balance (v1.3) ใช้ต้นไม้เดียวกัน: ใบยอด = P([balance, blinding, TAG_BAL]) · nullifier ยอด = P([blinding, epoch, TAG_NULL_BAL])
 // ทุกค่าอยู่ในช่วง BN254 p = 21888…617 (F.p) — การคำนวณฝั่ง JS ให้ได้ค่าตรงกับวงจรทุกขั้น
 
-const _tags = { NODE: 0n, LEAF: 1n, NULL: 2n };
+const _tags = { NODE: 0n, LEAF: 1n, NULL: 2n, BAL: 10n, NULL_BAL: 11n };
 
 export const MERKLE_DEPTH = 4;      // ต้องตรงวงจร membership.circom (Membership(4) = 16 ใบ)
 export const MAX_MEMBERS = 2 ** MERKLE_DEPTH;
@@ -10,7 +11,7 @@ export const MAX_MEMBERS = 2 ** MERKLE_DEPTH;
 let _poseidonCache = null;
 
 // โหลด Poseidon (circomlibjs — พารามิเตอร์ตรงกับวงจร circomlib)
-// คืน object: leafOf / nodeOf / nullifierOf / F (field BN254 ไว้เทียบค่าตรง ๆ) / raw
+// คืน object: leafOf / nodeOf / nullifierOf / balanceLeafOf / balanceNullifierOf / F (field BN254 ไว้เทียบค่าตรง ๆ) / raw
 export async function loadPoseidon() {
   if (_poseidonCache) return _poseidonCache;
   // circomlibjs เป็น CommonJS — ดึงผ่าน createRequire เพื่อความเสถียรกับ ESM
@@ -26,6 +27,8 @@ export async function loadPoseidon() {
     leafOf: (secretBig) => toBig(poseidon([secretBig, _tags.LEAF, 0n])),
     nodeOf: (left, right) => toBig(poseidon([left, right, _tags.NODE])),
     nullifierOf: (secretBig, epochBig) => toBig(poseidon([secretBig, epochBig, _tags.NULL])),
+    balanceLeafOf: (balanceBig, blindingBig) => toBig(poseidon([balanceBig, blindingBig, _tags.BAL])),
+    balanceNullifierOf: (blindingBig, epochBig) => toBig(poseidon([blindingBig, epochBig, _tags.NULL_BAL])),
     raw: poseidon,
   };
   return _poseidonCache;

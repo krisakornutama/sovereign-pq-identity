@@ -5,9 +5,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { loadPoseidon, buildTree, pathFor, newMemberSecret, MERKLE_DEPTH, MAX_MEMBERS } from '../src/merkle.js';
-import { proveMembership, verifyMembership, artifactsReady, loadNullifierLedger, isNullifierSpent, appendNullifier } from '../src/zk.js';
+import { proveMembership, verifyMembership, artifactsReady, loadNullifierLedger, isNullifierSpent, appendNullifier, proveBalance, verifyBalance, artifactsReadyBalance } from '../src/zk.js';
 
 const READY = artifactsReady();
+const READY_BAL = artifactsReadyBalance();
 
 test('merkle: ลำดับใบต่างกัน → รากต้องต่างกัน (canonical เสถียร)', async () => {
   const poseidon = await loadPoseidon();
@@ -84,4 +85,51 @@ test('zk: nullifier เดียวกันใช้ซ้ำรอบเดี
   assert.equal(isNullifierSpent(ledger, '123456789', 20261108, '42'), true);
   assert.equal(isNullifierSpent(ledger, '123456789', 20261109, '42'), false); // epoch ใหม่ = สิทธิ์ใหม่
   fs.rmSync(tmpLedger, { force: true });
+});
+
+// ==== วงจรที่ 2: Balance Threshold — พิสูจน์ "ยอด ≥ threshold" โดยไม่เปิดยอดจริง ====
+
+test('zk-balance: พิสูจน์ "ยอด ≥ threshold" จริง → ตรวจผ่าน และยอดจริงไม่โผล่ที่สาธารณะ', { skip: !READY_BAL && 'ยังไม่มี artifacts balance (wasm/zkey/vkey) — ดูวิธีสร้างใน README หัวข้อ "การสร้างแฟ้มวงจร"' }, async () => {
+  const poseidon = await loadPoseidon();
+  const balances = [50_000n, 500_000n, 1_200_000n];
+  const blindings = balances.map(() => newMemberSecret(randomBytes));
+  const commitments = balances.map((b, i) => poseidon.balanceLeafOf(b, blindings[i]));
+  const tree = buildTree(commitments, poseidon);
+  const epoch = 20261109n;
+  const threshold = 100_000n;
+  const { proof, publicSignals } = await proveBalance({ balance: balances[1], blinding: blindings[1], path: pathFor(tree, 1), root: tree.root, epoch, threshold });
+  assert.equal(await verifyBalance({ proof, publicSignals }), true); // ผู้ตรวจใช้ vkey ล้วน
+  assert.equal(publicSignals.threshold, '100000');                  // threshold สาธารณะตามที่อ้าง
+  assert.ok(!Object.values(publicSignals).includes('500000'));      // ยอดจริงต้องไม่เทียบเตียงออกมา
+  assert.equal(publicSignals.epochNonce, '20261109');
+});
+
+test('zk-balance: ยอด < threshold → วงจรปฏิเสธที่ witness (ไม่มี proof ออกมาให้หลอก)', { skip: !READY_BAL && 'ยังไม่มี artifacts balance (wasm/zkey/vkey)' }, async () => {
+  const poseidon = await loadPoseidon();
+  const commitments = [poseidon.balanceLeafOf(50_000n, 111n)];
+  const tree = buildTree(commitments, poseidon);
+  await assert.rejects(() => proveBalance({ balance: 50_000n, blinding: 111n, path: pathFor(tree, 0), root: tree.root, epoch: 20261109n, threshold: 100_000n }));
+});
+
+test('zk-balance: แก้ threshold ใน publicSignals → ตรวจไม่ผ่าน (proof ผูกข้ออ้างตายตัว)', { skip: !READY_BAL && 'ยังไม่มี artifacts balance (wasm/zkey/vkey)' }, async () => {
+  const poseidon = await loadPoseidon();
+  const commitments = [poseidon.balanceLeafOf(900_000n, 222n)];
+  const tree = buildTree(commitments, poseidon);
+  const { proof, publicSignals } = await proveBalance({ balance: 900_000n, blinding: 222n, path: pathFor(tree, 0), root: tree.root, epoch: 20261109n, threshold: 100_000n });
+  const tampered = { ...publicSignals, threshold: (BigInt(publicSignals.threshold) + 1n).toString() }; // อ้างขั้นต่ำสูงขึ้นภายหลัง → ไม่ผ่าน
+  assert.equal(await verifyBalance({ proof, publicSignals: tampered }), false);
+});
+
+test('zk-balance: leaf ไม่ตรงกลุ่มของ issuer (เหลื่อมสุ่มอีกชุด) → วงจรปฏิเสธ', { skip: !READY_BAL && 'ยังไม่มี artifacts balance (wasm/zkey/vkey)' }, async () => {
+  const poseidon = await loadPoseidon();
+  const commitments = [poseidon.balanceLeafOf(900_000n, 333n)];
+  const tree = buildTree(commitments, poseidon);
+  const wrongBlinding = newMemberSecret(randomBytes); // คนอื่นพยายามเอายอดว่าวงจรที่ผู้อื่นลงบันทึก
+  await assert.rejects(() => proveBalance({ balance: 900_000n, blinding: wrongBlinding, path: pathFor(tree, 0), root: tree.root, epoch: 20261109n, threshold: 100_000n }));
+});
+
+test('zk-balance: แท็กโดเมนแยกชัด — nullifier วงจรยอดไม่ทับ nullifier สมาชิกแม้ค่าลับเท่ากัน', async () => {
+  const poseidon = await loadPoseidon();
+  const epoch = 20261109n;
+  assert.notEqual(poseidon.nullifierOf(42n, epoch), poseidon.balanceNullifierOf(42n, epoch)); // แท็ก 2 vs 11
 });

@@ -19,6 +19,17 @@ export function artifactsReady(base = process.cwd()) {
   return Object.values(ARTIFACTS).every((f) => fs.existsSync(nodePath.join(base, f)));
 }
 
+// แฟ้มวงจร balance threshold (วงจรที่ 2 — พิสูจน์ "ยอด ≥ threshold" โดยไม่เปิดยอดจริง)
+export const ARTIFACTS_BALANCE = {
+  wasm: 'artifacts/balance.wasm',
+  zkey: 'artifacts/balance.zkey',
+  vkey: 'artifacts/balance_vkey.json',
+};
+
+export function artifactsReadyBalance(base = process.cwd()) {
+  return Object.values(ARTIFACTS_BALANCE).every((f) => fs.existsSync(nodePath.join(base, f)));
+}
+
 // ส่งสัญญาณเข้าวงจร: ต้องเป็น string-decimal ทั้งหมด (รูปแบบที่ witness WASM อ่าน)
 export function witnessInputs({ secret, path, root, epoch }) {
   return {
@@ -49,6 +60,40 @@ export async function proveMembership({ secret, path, root, epoch }) {
   }
 }
 
+// ส่งสัญญาณเข้าวงจร balance: string-decimal ทั้งหมด (รูปแบบที่ witness WASM อ่าน)
+export function balanceWitnessInputs({ balance, blinding, path, root, epoch, threshold }) {
+  return {
+    balance: BigInt(balance).toString(10),
+    blinding: BigInt(blinding).toString(10),
+    pathElements: path.elements.map((e) => BigInt(e).toString(10)),
+    pathIndices: path.indices.map((b) => Number(b)),
+    merkleRoot: BigInt(root).toString(10),
+    epochNonce: BigInt(epoch).toString(10),
+    threshold: BigInt(threshold).toString(10),
+  };
+}
+
+// พิสูจน์ว่า "ยอด ≥ threshold" — ยอดจริงและตำแหน่งใบในต้นไม้คือความลับทั้งหมด
+// (ยอดต่ำกว่า threshold วงจรปฏิเสธที่ witness เอง — ไม่มี proof ให้หลอกได้)
+export async function proveBalance({ balance, blinding, path, root, epoch, threshold }) {
+  if (!artifactsReadyBalance()) throw new Error('ยังไม่มีแฟ้มวงจร balance ใน artifacts/ — ดูวิธีสร้างใน README หัวข้อ "การสร้างแฟ้มวงจร"');
+  const inputs = balanceWitnessInputs({ balance, blinding, path, root, epoch, threshold });
+  const tmp = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'spq-wtns-'));
+  try {
+    const wtnsPath = nodePath.join(tmp, 'w.wtns');
+    await snarkjs.wtns.calculate(inputs, ARTIFACTS_BALANCE.wasm, wtnsPath);
+    const out = await snarkjs.groth16.prove(ARTIFACTS_BALANCE.zkey, wtnsPath, null, null);
+    // ลำดับ publicSignals ของ snarkjs: [nullifierHash (output), merkleRoot, epochNonce, threshold]
+    const [sigNullifier, sigRoot, sigEpoch, sigThreshold] = out.publicSignals;
+    if (sigRoot !== BigInt(root).toString(10)) throw new Error('root ใน publicSignals ไม่ตรงข้อมูลส่งเข้า');
+    if (sigEpoch !== BigInt(epoch).toString(10)) throw new Error('epoch ใน publicSignals ไม่ตรงข้อมูลส่งเข้า');
+    if (sigThreshold !== BigInt(threshold).toString(10)) throw new Error('threshold ใน publicSignals ไม่ตรงข้อมูลส่งเข้า');
+    return { proof: out.proof, publicSignals: { nullifierHash: sigNullifier, merkleRoot: sigRoot, epochNonce: sigEpoch, threshold: sigThreshold } };
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 // ตรวจ — โหนดปลายทางไม่ต้องถือ zkey หรือกุญแจสมาชิกใด ๆ — ใช้ vkey ล้วน
 export async function verifyMembership({ proof, publicSignals, vkeyPath = ARTIFACTS.vkey }) {
   const vkey = JSON.parse(fs.readFileSync(vkeyPath, 'utf8'));
@@ -56,6 +101,40 @@ export async function verifyMembership({ proof, publicSignals, vkeyPath = ARTIFA
   // ลำดับที่ snarkjs/vkey ต้องการ: [nullifierHash, merkleRoot, epochNonce]
   const signals = [publicSignals.nullifierHash, publicSignals.merkleRoot, publicSignals.epochNonce];
   return Boolean(await snarkjs.groth16.verify(vkey, signals, proofRaw));
+}
+
+// ตรวจใบพิสูจน์ยอด — โหนดตรวจใช้ vkey ล้วน (ไม่รู้ตัวตน ไม่รู้ยอดจริง)
+export async function verifyBalance({ proof, publicSignals, vkeyPath = ARTIFACTS_BALANCE.vkey }) {
+  const vkey = JSON.parse(fs.readFileSync(vkeyPath, 'utf8'));
+  const proofRaw = { pi_a: proof.pi_a, pi_b: proof.pi_b, pi_c: proof.pi_c };
+  // ลำดับที่ snarkjs/vkey ต้องการ: [nullifierHash, merkleRoot, epochNonce, threshold]
+  const signals = [publicSignals.nullifierHash, publicSignals.merkleRoot, publicSignals.epochNonce, publicSignals.threshold];
+  return Boolean(await snarkjs.groth16.verify(vkey, signals, proofRaw));
+}
+
+// รูปแบบแฟ้มใบพิสูจน์ยอดนิรนาม — ข้ออ้างเดียวที่ประกาศ: ยอด ≥ threshold (ไม่มียอดจริงหลุดลงแฟ้ม)
+export function balanceReceipt({ proof, publicSignals, epoch, threshold }) {
+  const rootHex = '0x' + BigInt(publicSignals.merkleRoot).toString(16);
+  const nullHex = '0x' + BigInt(publicSignals.nullifierHash).toString(16);
+  return {
+    receiptId: 'pqri_thr_' + BigInt(publicSignals.nullifierHash).toString(16).slice(0, 8),
+    authMode: 'zk-snark-groth16',
+    circuit: 'balance_v1',
+    issued_at: new Date().toISOString(),
+    epochNonce: String(epoch),
+    threshold: String(threshold),
+    zkProof: {
+      pi_a: proof.pi_a.map(String),
+      pi_b: proof.pi_b.map((r) => r.map(String)),
+      pi_c: proof.pi_c.map(String),
+    },
+    publicSignals: {
+      merkleRoot: rootHex,
+      nullifierHash: nullHex,
+      epochNonce: String(epoch),
+      threshold: String(threshold),
+    },
+  };
 }
 
 // รูปแบบแฟ้มใบเสร็จนิรนาม (anon receipt)
