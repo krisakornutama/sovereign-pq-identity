@@ -9,7 +9,7 @@
 [![Standard](https://img.shields.io/badge/Standard-FIPS_205_SLH--DSA-fbbf24?style=for-the-badge&labelColor=030712)](https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.205.pdf)
 [![Zero Cloud](https://img.shields.io/badge/Cloud-ZERO-34d399?style=for-the-badge&labelColor=030712)](.)
 [![ZK-SNARK](https://img.shields.io/badge/ZK--SNARK-Groth16_BN254-a855f7?style=for-the-badge&labelColor=030712)](#-️-zk-snark-anonymous-proof-v12--พิสูจน์ว่าเป็นสมาชิกโดยไม่บอกว่าใคร)
-[![Tests](https://img.shields.io/badge/Tests-33_passing-22d3ee?style=for-the-badge&labelColor=030712)](#-ผลการทดสอบจากเครื่องจริง)
+[![Tests](https://img.shields.io/badge/Tests-40_passing-22d3ee?style=for-the-badge&labelColor=030712)](#-ผลการทดสอบจากเครื่องจริง)
 [![Node](https://img.shields.io/badge/Node.js-%E2%89%A520-43853d?style=for-the-badge&labelColor=030712)](./package.json)
 
 </div>
@@ -26,24 +26,32 @@ node cli.js keygen "ชื่อเรียกเครื่อง"   # สร
 node cli.js keygen --slh "ชื่อ"        # แบบสามชั้น: เพิ่มลายเซ็น SLH-DSA-128s (FIPS 205) ตั้งแต่เกิดตัวตน
 node cli.js demo        # จำลองขาย → ถอดกุญแจจาก vault → เซ็นตามโปรไฟล์ → ตรวจ → ลงคลัง
 node cli.js selftest    # ทดสอบการบุกรุก 7 เคส (สลิป + vault)
-npm test                # ชุดทดสอบเต็ม 33 เคส (ไม่ใช้เน็ต)
+npm test                # ชุดทดสอบเต็ม 40 เคส (ไม่ใช้เน็ต)
 
 # หมุนเวียนกุญแจ (v1.4) — ตัวตนใหม่แทนชุดเดิม แล้วใบเสร็จเก่ายังตรวจผ่านทุกใบ
 node cli.js rotate --slh           # หมุนครั้งเดียว + อัปเกรดเป็นสามชั้นพร้อมกัน (dual → triple)
 node cli.js anchors                # สายสกุลกุญแจที่ปลดอายุแล้ว (กุญแจสาธารณะล้วน)
 node cli.js rotate --if-due 90     # อายุตัวตนถึง 90 วันเมื่อไหร่ คำสั่งปกติครั้งถัดไปจึงหมุน (ยังไม่ถึง = exit 0 ไม่เขียนแฟ้ม)
 
-# ZK-SNARK (v1.2) — พิสูจน์ว่าเป็นสมาชิกกลุ่ม โดยไม่บอกว่าใคร
+# ZK-SNARK (v1.2–v1.3) — พิสูจน์กลุ่ม/ยอด โปรไฟล์ฐาน D=4 (16 ช่อง)
 node cli.js zk enroll "กลุ่มซื้อฟาร์ม A"   # สมัครสมาชิก (กุญแจลับเข้า vault เข้ารหัสเท่านั้น)
 node cli.js zk tree                        # รวมรากกลุ่ม → data/members_root.json
 node cli.js zk prove "กลุ่มซื้อฟาร์ม A"    # สร้างใบพิสูจน์นิรนาม (nullifier กันใช้ซ้ำ)
 node cli.js zk verify data/zk-receipt-<epoch>.json   # ฝั่งผู้ตรวจ: ใช้ vkey เท่านั้น ไม่แตะกุญแจ
 
-# ZK-SNARK (v1.3) — พิสูจน์ "ยอด ≥ threshold" โดยไม่เปิดเผยยอดจริง
 node cli.js zk issue "แฟร์หลัก" 15600000     # ออกใบยอด 156,000.00 บาท (สตางค์) — ยอดเข้าคลังเข้ารหัสแฟ้มที่สอง
 node cli.js zk balance-tree                  # รากใบยอด → data/balances_root.json (issuer ประกาศให้ผู้ตรวจ)
 node cli.js zk prove-bal "แฟร์หลัก" 10000000 # พิสูจน์ "ยอด ≥ 100,000.00 บาท" → data/zk-balance-<epoch>.json
 node cli.js zk verify-bal data/zk-balance-<epoch>.json  # ฝั่งผู้ตรวจ: ไม่รู้ใคร ไม่รู้ยอด แต่ยืนยันข้ออ้างได้
+
+# ZK-SNARK (v1.5) — โปรไฟล์ลึก D=5 (32 ช่อง) + พิธีหลายฝ่าย
+node cli.js zk tree --deep                   # รากโปรไฟล์ลึก D=5 → data/members_root.json (capacity: 32)
+node cli.js zk prove "ชื่อ"                  # อ่านโปรไฟล์จากไฟล์รากอัตโนมัติ (D=4 หรือ D=5)
+node cli.js zk verify data/zk-receipt-<epoch>.json   # เลือก vkey จาก field `circuit` ในใบเอง (membership_v1 / membership_d5_v1)
+
+node cli.js zk balance-tree --deep           # รากใบยอดโปรไฟล์ลึก D=5
+node cli.js zk prove-bal "ชื่อ" 10000000     # พิสูจน์ยอดโปรไฟล์ลึก (อ่านโปรไฟล์จากไฟล์ราก)
+node cli.js zk verify-bal data/zk-balance-<epoch>.json # เลือก vkey จาก field `circuit` ในใบเอง (balance_v1 / balance_d5_v1)
 ```
 
 **เอาต์พุตจริงตอนรัน `node cli.js demo` (คัดจากเครื่องที่สร้างระบบนี้เอง):**
@@ -467,6 +475,109 @@ keygen_ms=26 sign_ms=24 verify_ms=4 sig_bytes=2420 pk_bytes=1312 ok=true       �
 
 ---
 
+## 🎪 ZK-SNARK โปรไฟล์ลึก D=5 + พิธีหลายฝ่าย (v1.5) — กลุ่ม 32 ช่อง · ใบยอด 32 ใบ · โซ่เชื่อมั่น 3 สาย
+
+รุ่น v1.5 ขยายความจุกลุ่มจาก 16 → **32 ช่อง/ราก** (D=4 → D=5) และนำเสนอ **พิธี Groth16 หลายฝ่าย (multi-party ceremony chain)** แบบโปร่งใส — ทั้งหมดทำในเครื่องเดียว (สาธิตโครงสาย) แต่โครงรองรับผู้ร่วมจริง (ต่างเครื่อง) ได้ทุกจุด
+
+### 🔄 พิธีหลายฝ่าย (Ceremony Chain ×2 วงจร) — เอาต์พุตจริงจากเครื่องสร้างระบบ
+
+```bash
+# โปรไฟล์ลึก D=5 — ทั้ง membership และ balance ใช้ pot14 เดิม (รีไซเคิล — ไม่ทำ Powers of Tau ใหม่)
+node scripts/ceremony.mjs
+```
+
+**สายพิธีต่อวงจร (chain 3 ขั้นต่อฝ่าย):**
+
+```
+groth16 setup (ฐานจาก pot14)  →  zkey contribute [local-a]  →  zkey contribute [local-b]  →  zkey verify (ZKey Ok!)  →  export vkey
+```
+
+| วงจร | Constraints | ZKey (bytes) | WASM (bytes) | VKey (bytes) | เวลาพิธี |
+|---|---|---|---|---|---|
+| **membership_d5** (D=5, 32 ช่อง) | 4,255 | 2,054,018 B (~2.0 MB) | 1,858,976 B (~1.8 MB) | 3,542 B | ~16.2 s |
+| **balance_d5** (D=5, 32 ใบ) | 4,324 | 2,084,722 B (~2.1 MB) | 1,861,964 B (~1.8 MB) | 3,740 B | ~16.2 s |
+
+**เปรียบเทียบ D=4 → D=5 (ขนาด artifacts เพิ่ม ~×1.3–1.4):**
+
+| | D=4 (ฐาน) | D=5 (ลึก v1.5) |
+|---|---|---|
+| membership zkey | 1,572,831 B | 2,054,018 B (+31%) |
+| membership wasm | 1,855,466 B | 1,858,976 B (+0.2%) |
+| balance zkey | 1,603,535 B | 2,084,722 B (+30%) |
+| balance wasm | 1,858,451 B | 1,861,964 B (+0.2%) |
+
+**กระบวนการพิธีจริง (คัดจาก `artifacts/ceremony.json`):**
+
+```json
+{
+  "protocol": "groth16",
+  "curve": "bn254",
+  "pot": {
+    "powers": 14,
+    "sha256": "968717271c8fb8b7f411c97ebc7a92efe033f0db18affa4c410fec6e4b1e493f"
+  },
+  "entropy_policy": "entropy ของทุกฝ่ายสุ่มจาก node:crypto.randomBytes(32) ในหน่วยความจำและลบทิ้งทันที — ไม่มีการบันทึกทางใด (log เฉพาะชื่อผู้ร่วม + sha256)",
+  "circuits": [
+    {
+      "profile": "membership_d5_v1",
+      "chain": [
+        { "step": "setup", "contributor": "base (จาก pot14)", "zkey_sha256": "5a38a8e5eb8c80914c2fcf3315ad2c575193e85bcf1af5e2b21745dc4a2ea7f3", "seconds": 5.8 },
+        { "step": "contribute", "contributor": "local-a", "zkey_sha256": "4f3e0b68dd73e946de8210117d9805b607b2331afb549db6500d1434d2fd53fc", "seconds": 2.0 },
+        { "step": "contribute", "contributor": "local-b", "zkey_sha256": "403468abbc4bac9cd1e04cd42e77e2361038fd93dac69420ccb411787d768b48", "seconds": 1.9 },
+        { "step": "verify", "contributor": "snarkjs", "result": "ZKey Ok!", "seconds": 6.4 }
+      ],
+      "verified": true
+    },
+    {
+      "profile": "balance_d5_v1",
+      "chain": [
+        { "step": "setup", "contributor": "base (จาก pot14)", "zkey_sha256": "8d8ed39c87c7759c9bbe3872c67cd8eaeeb5fe1585737cfb9fa754275bf6eaee", "seconds": 5.8 },
+        { "step": "contribute", "contributor": "local-a", "zkey_sha256": "ec69dd5b12d499f64770a1e16f567d38e8354aaffaa5530efd166ee2f8b45eee", "seconds": 2.0 },
+        { "step": "contribute", "contributor": "local-b", "zkey_sha256": "e423e1af8557b6624f119a2c4fe4a96fde5d03f7a7eef540d7c5e3c640cdb5ff", "seconds": 2.0 },
+        { "step": "verify", "contributor": "snarkjs", "result": "ZKey Ok!", "seconds": 6.3 }
+      ],
+      "verified": true
+    }
+  ]
+}
+```
+
+> ⚠️ **ข้อจำกัดพิธี v1.5 (ตามความจริง):**
+> - 🔒 **Entropy ของทุกฝ่ายไม่ถูกบันทึกที่ไหน** — สุ่มในหน่วยความจำ (`crypto.randomBytes(32)`) ใช้แล้วทิ้งทันที; `artifacts/ceremony.json` บันทึกเฉพาะ **ชื่อผู้ร่วม + sha256 ของ zkey ทุกขั้น + sha256 ของ pot14**
+> - 🖥️ **พิธีนี้รันในเครื่องเดียว** (local-a, local-b เป็นกระบวนการจำลอง) — โครงสาย (`scripts/ceremony.mjs`) รองรับผู้ร่วมจริง (ต่างเครื่อง) ได้ทุกจุด: ส่งแฟ้ม zkey ไปให้ฝ่ายถัดไป → ฝ่ายนั้นรัน `contribute` ด้วย entropy ของตัวเอง → ส่งกลับ
+> - 📦 **D=5 artifacts ใหญ่กว่า D=4 ~×1.3** — zkey ~2 MB ต่อวงจร (ยังอยู่ในขนาดที่ commit ได้ตามกฎ repo); wasm คงที่เพราะโครงวงจรคล้ายกัน
+> - 🔁 **โปรไฟล์ฐาน D=4 คง artifacts เดิมไว้** — ใบพิสูจน์เก่า (`membership_v1`, `balance_v1`) ตรวจได้ด้วย vkey ชุดเดิมตลอดไป
+
+### 🌳 CLI โปรไฟล์ลึก — ธง `--deep` ทุกคำสั่ง tree/prove/verify
+
+```bash
+# สมาชิก
+node cli.js zk tree --deep              # D=5 → data/members_root.json (depth: 5, capacity: 32)
+node cli.js zk prove "ชื่อ"              # อ่านโปรไฟล์จาก depth ในไฟล์รากอัตโนมัติ
+node cli.js zk verify receipt.json       # เลือก vkey จาก field "circuit" ในใบ (membership_v1 / membership_d5_v1)
+
+# ใบยอด
+node cli.js zk balance-tree --deep      # D=5 → data/balances_root.json (depth: 5, capacity: 32)
+node cli.js zk prove-bal "ชื่อ" 10000000 # พิสูจน์ยอดโปรไฟล์ลึก (อ่านโปรไฟล์จากไฟล์ราก)
+node cli.js zk verify-bal receipt.json   # เลือก vkey จาก field "circuit" ในใบ (balance_v1 / balance_d5_v1)
+```
+
+**ตัวอย่างไฟล์ราก D=5 (data/members_root.json):**
+```json
+{
+  "root": "0x...",
+  "members": 4,
+  "depth": 5,
+  "capacity": 32,
+  "generated_at": "2026-11-09T...",
+  "labels": ["สมาชิกA", "สมาชิกB", "สมาชิกC", "สมาชิกD"]
+}
+```
+
+---
+
+## ✅ ผลการทดสอบจากเครื่องจริง
+
 ## ✅ ผลการทดสอบจากเครื่องจริง
 
 ```
@@ -504,8 +615,15 @@ $ npm test
 ✔ zk-balance: แก้ threshold ใน publicSignals → ตรวจไม่ผ่าน (proof ผูกข้ออ้างตายตัว)
 ✔ zk-balance: leaf ไม่ตรงกลุ่มของ issuer (เหลื่อมสุ่มอีกชุด) → วงจรปฏิเสธ
 ✔ zk-balance: แท็กโดเมนแยกชัด — nullifier วงจรยอดไม่ทับ nullifier สมาชิกแม้ค่าลับเท่ากัน
+✔ merkle D=5: ความจุ 32 ช่อง · padding เต็มและรากเสถียร
+✔ zk D=5: พิสูจน์สมาชิกจริงโปรไฟล์ลึก → ตรวจผ่านด้วย vkey D=5
+✔ zk-balance D=5: พิสูจน์ยอดจริงโปรไฟล์ลึก → ตรวจผ่านด้วย vkey D=5
+✔ zk cross-vkey: ใบพิสูจน์ D=4 ตรวจด้วย vkey D=5 → ต้องปฏิเสธ
+✔ zk cross-vkey: ใบพิสูจน์ D=5 ตรวจด้วย vkey D=4 → ต้องปฏิเสธ
+✔ zk cross-circuit: ใบพิสูจน์ membership ตรวจด้วย vkey balance → ต้องปฏิเสธ
+✔ zk cross-circuit: ใบพิสูจน์ balance ตรวจด้วย vkey membership → ต้องปฏิเสธ (error หรือ false)
 
-ℹ tests 33 · pass 33 · fail 0 · duration ~130 s — กินเวลาราว 2 นาทีเพราะเทสเซ็นชั้น SLH-DSA จริง (~22 วิ/ลายเซ็น) ตามข้อจำกัดที่ประกาศไว้
+ℹ tests 40 · pass 40 · fail 0 · duration ~132 s — กินเวลาราว 2 นาทีเพราะเทสเซ็นชั้น SLH-DSA จริง (~22 วิ/ลายเซ็น) ตามข้อจำกัดที่ประกาศไว้
 ```
 
 ```
@@ -542,8 +660,9 @@ repo นี้คือ**ชั้นตรวจสอบอัตลักษ�
 | ✅ **v1.2 — บังเกตุจากเครื่องจริง** | **ZK-SNARK Anonymous Membership** — วงจรที่ 1 Groth16 (Poseidon Merkle + nullifier กันใช้ซ้ำ) · CLI `zk enroll/list/tree/prove/verify` · ตรวจด้วย vkey ล้วน | พร้อมใช้ |
 | ✅ **v1.3 — บังเกตุจากเครื่องจริง** | **ZK-SNARK Balance Threshold** — วงจรที่ 2 `balance.circom` (LessEqThan 64 บิต · ยอด/กุญแจลับทั้งชุด ไม่เปิดยอดจริง) · CLI `zk issue/issue-list/balance-tree/prove-bal/verify-bal` · 26/26 ทดสอบ | พร้อมใช้ |
 | ✅ **v1.4 — บังเกตุจากเครื่องจริง** | **SLH-DSA (FIPS 205) ชั้นที่สาม + หมุนเวียนกุญแจ** — โปรไฟล์ `--slh` เลือกใช้ · `rotate` + สายสกุลกุญแจสาธารณะ (`anchors.jsonl`) · เกตอัตโนมัติ `--if-due` · ใบเก่า back-compat 100% · 33/33 ทดสอบ | พร้อมใช้ |
-| 🧩 **เฟสถัดไป** | Falcon (FIPS 206) เมื่อ finalize · trusted setup ceremony หลายฝ่าย · กลุ่มลึกขึ้นกว่า D=4 | วางแผน |
-| 🔊 **เฟส 4** | เข้ารหัสแบบด้าน ML-KEM (FIPS 203) สำหรับแฟ้มที่ส่งระหว่างโหนด | วางแผน |
+| ✅ **v1.5 — บังเกตุจากเครื่องจริง** | **โปรไฟล์ลึก D=5 (32 ช่อง) + พิธีหลายฝ่าย** — `membership_d5.circom` / `balance_d5.circom` · `scripts/ceremony.mjs` (chain: setup → contribute×2 → verify ZKey Ok! → export vkey) · CLI ธง `--deep` ครบทุกคำสั่ง tree/prove/verify/balance-tree/prove-bal/verify-bal · verify เลือก vkey จาก field `circuit` ในใบ · cross-vkey/cross-circuit rejection · `artifacts/ceremony.json` manifest · 40/40 ทดสอบ | พร้อมใช้ |
+| 🔊 **v1.6 (เฟส 4)** | **ML-KEM (FIPS 203) — หน้ารหัสไฮบริดสำหรับแฟ้มระหว่างโหนด** — `src/kem.js` + `kem keygen/pub` + `seal <file> --to <pub>` + `open <seal.json>` (ML-KEM-768 + AES-256-GCM) · vault แยก `data/kem.vault.json` · 4 เคสทดสอบ (roundtrip, tamper, wrong key, envelope integrity) | วางแผน |
+| 🧩 **เฟสถัดไป** | Falcon (FIPS 206 / FN-DSA) เมื่อ finalize — คงพับตามนโยบาย "หยิบที่จบมาใช้ก่อน" (NIST ยืนยัน 27 ต.ค. 2026: FIPS 206 ยังเป็น "selected for ongoing standardization") | วางแผน |
 
 ---
 

@@ -1,0 +1,139 @@
+{
+  "protocol": "groth16",
+  "curve": "bn254",
+  "tool": "snarkjs 0.7.6",
+  "created_at": "2026-11-09T13:57:26.067Z",
+  "pot": {
+    "powers": 14,
+    "file": "build/pot14_final.ptau",
+    "sha256": "968717271c8fb8b7f411c97ebc7a92efe033f0db18affa4c410fec6e4b1e493f",
+    "note": "Powers of Tau เตรียม phase2 จากพิธีเครื่องนี้เอง (v1.2) — แฟ้มอยู่ใน build/ นอก git; zkey ของพิธีนี้เกิดบนฐาน pot14 ชุดเดียวกัน"
+  },
+  "entropy_policy": "entropy ของทุกฝ่ายสุ่มจาก node:crypto.randomBytes(32) ในหน่วยความจำและลบทิ้งทันทีเมื่อขั้นจบ — ไม่มีการบันทึกทางใด (log เฉพาะชื่อผู้ร่วม + sha256)",
+  "circuits": [
+    {
+      "circuit": "circuits/membership_d5.circom",
+      "profile": "membership_d5_v1",
+      "name": "membership (โปรไฟล์ลึก D=5 — 32 ช่อง)",
+      "started_at": "2026-11-09T13:57:26.160Z",
+      "chain": [
+        {
+          "step": "setup (groth16 setup)",
+          "contributor": "base (จาก pot14)",
+          "zkey_sha256": "5a38a8e5eb8c80914c2fcf3315ad2c575193e85bcf1af5e2b21745dc4a2ea7f3",
+          "seconds": 5.8
+        },
+        {
+          "step": "contribute",
+          "contributor": "local-a",
+          "zkey_sha256": "4f3e0b68dd73e946de8210117d9805b607b2331afb549db6500d1434d2fd53fc",
+          "seconds": 2
+        },
+        {
+          "step": "contribute",
+          "contributor": "local-b",
+          "zkey_sha256": "403468abbc4bac9cd1e04cd42e77e2361038fd93dac69420ccb411787d768b48",
+          "seconds": 1.9
+        },
+        {
+          "step": "verify (zkey vs r1cs+pot)",
+          "contributor": "snarkjs (ในเครื่องผู้รันพิธี)",
+          "result": "ZKey Ok!",
+          "seconds": 6.4
+        }
+      ],
+      "shape": {
+        "nConstraints": 4255,
+        "nVars": 4263,
+        "nPubInputs": 2,
+        "nPrvInputs": 11,
+        "nOutputs": 1,
+        "nLabels": 6589
+      },
+      "verified": true,
+      "artifacts": {
+        "zkey": {
+          "file": "artifacts/membership_d5.zkey",
+          "bytes": 2054018,
+          "sha256": "403468abbc4bac9cd1e04cd42e77e2361038fd93dac69420ccb411787d768b48"
+        },
+        "wasm": {
+          "file": "artifacts/membership_d5.wasm",
+          "bytes": 1858976,
+          "sha256": "8fe548bcb8d6a61027c9da5b9b917d20f0ae788e2bc060b60182c68773f4fd70"
+        },
+        "vkey": {
+          "file": "artifacts/membership_d5_vkey.json",
+          "bytes": 3542,
+          "sha256": "590ae214e80ac7c108171b0b753fb433d9e6411f79b95c2d81616ebcd216bf18",
+          "note": "ผู้ตรวจถือแฟ้มนี้เท่านั้นก็ตรวจได้"
+        }
+      },
+      "total_seconds": 16.2
+    },
+    {
+      "circuit": "circuits/balance_d5.circom",
+      "profile": "balance_d5_v1",
+      "name": "balance threshold (โปรไฟล์ลึก D=5 — 32 ใบ)",
+      "started_at": "2026-11-09T13:57:42.914Z",
+      "chain": [
+        {
+          "step": "setup (groth16 setup)",
+          "contributor": "base (จาก pot14)",
+          "zkey_sha256": "8d8ed39c87c7759c9bbe3872c67cd8eaeeb5fe1585737cfb9fa754275bf6eaee",
+          "seconds": 5.8
+        },
+        {
+          "step": "contribute",
+          "contributor": "local-a",
+          "zkey_sha256": "ec69dd5b12d499f64770a1e16f567d38e8354aaffaa5530efd166ee2f8b45eee",
+          "seconds": 2
+        },
+        {
+          "step": "contribute",
+          "contributor": "local-b",
+          "zkey_sha256": "e423e1af8557b6624f119a2c4fe4a96fde5d03f7a7eef540d7c5e3c640cdb5ff",
+          "seconds": 2
+        },
+        {
+          "step": "verify (zkey vs r1cs+pot)",
+          "contributor": "snarkjs (ในเครื่องผู้รันพิธี)",
+          "result": "ZKey Ok!",
+          "seconds": 6.3
+        }
+      ],
+      "shape": {
+        "nConstraints": 4324,
+        "nVars": 4332,
+        "nPubInputs": 3,
+        "nPrvInputs": 12,
+        "nOutputs": 1,
+        "nLabels": 6663
+      },
+      "verified": true,
+      "artifacts": {
+        "zkey": {
+          "file": "artifacts/balance_d5.zkey",
+          "bytes": 2084722,
+          "sha256": "e423e1af8557b6624f119a2c4fe4a96fde5d03f7a7eef540d7c5e3c640cdb5ff"
+        },
+        "wasm": {
+          "file": "artifacts/balance_d5.wasm",
+          "bytes": 1861964,
+          "sha256": "542cf6c42eafc742769bc62be8d92dedc67b7d5d3d61f56606ad1e1b92d9f29a"
+        },
+        "vkey": {
+          "file": "artifacts/balance_d5_vkey.json",
+          "bytes": 3740,
+          "sha256": "1e98d4d9cdd7924ea5c6b8a36a2dfb237652d11cf19cd9e7cac37e47832bbada",
+          "note": "ผู้ตรวจถือแฟ้มนี้เท่านั้นก็ตรวจได้"
+        }
+      },
+      "total_seconds": 16.2
+    }
+  ],
+  "notes": [
+    "พิธีนี้รันในเครื่องเดียว: ผู้ร่วมทุกชื่อในสายคือกระบวนการเดียวกันที่ entropy สุ่มแยกกัน — โครงสายรองรับผู้ร่วมจริง (ต่างเครื่อง) ได้ทุกจุดต่อขยาย",
+    "ใบรับรองสาย = แฟ้มนี้ (ชื่อผู้ร่วม + sha256 ทุกขั้น) · แฟ้ม entropy ไม่มีอยู่ในโลกนี้"
+  ]
+}

@@ -5,8 +5,9 @@
 
 const _tags = { NODE: 0n, LEAF: 1n, NULL: 2n, BAL: 10n, NULL_BAL: 11n };
 
-export const MERKLE_DEPTH = 4;      // ต้องตรงวงจร membership.circom (Membership(4) = 16 ใบ)
+export const MERKLE_DEPTH = 4;      // โปรไฟล์ฐาน — ตรงวงจร membership.circom (Membership(4) = 16 ใบ)
 export const MAX_MEMBERS = 2 ** MERKLE_DEPTH;
+export const DEEP_DEPTH = 5;        // โปรไฟล์ลึก (v1.5) — ตรงวงจร *_d5.circom (Membership(5) = 32 ใบ)
 
 let _poseidonCache = null;
 
@@ -42,11 +43,12 @@ export function newMemberSecret(randomBytesFn) {
 
 // ต้นไม้คงเส้นคงวา: ลำดับใบ = ลำดับสมาชิก (ใบขาดช่วง ๆ ห้าม) — เติมช่องว่างด้วย 0
 export function buildTree(commitments, poseidon, { depth = MERKLE_DEPTH } = {}) {
+  const capacity = 2 ** depth;
   const leaves = commitments.map((c) => BigInt(c));
-  if (leaves.length > MAX_MEMBERS) {
-    throw new Error(`สมาชิกเกินความจุแผนผัง (${leaves.length} > ${MAX_MEMBERS})`);
+  if (leaves.length > capacity) {
+    throw new Error(`สมาชิกเกินความจุแผนผัง (${leaves.length} > ${capacity}) — ปักรากโปรไฟล์ลึกขึ้น: zk tree --deep (D=5 = 32 ช่อง)`);
   }
-  while (leaves.length < MAX_MEMBERS) leaves.push(0n); // padding — ใบสมัครเว้นช่องว่าง
+  while (leaves.length < capacity) leaves.push(0n); // padding — ใบสมัครเว้นช่องว่าง
 
   const levels = [leaves];
   for (let d = 0; d < depth; d++) {
@@ -80,4 +82,16 @@ export function pathFor(tree, index) {
 // มุมมอง commitment สำหรับแฟ้ม JSON — เลขจำนวนใหญ่รูปแบบ string decimal
 export function commitmentView(commitments) {
   return commitments.map((c, i) => ({ index: i, commitment: c.toString() }));
+}
+
+// ความจุตามโปรไฟล์ที่ปักในแฟ้มราก (field depth) — แฟ้มรากรุ่นเก่าไม่มี field นี้ = โปรไฟล์ฐาน (16)
+export function capacityFromRootFile(rootJson) {
+  const d = Number(rootJson?.depth);
+  return Number.isInteger(d) && d >= 1 && d <= 12 ? 2 ** d : MAX_MEMBERS;
+}
+
+// ความลึกจากแฟ้มราก — แฟ้มเสีย/ไม่มี field = โปรไฟล์ฐาน (ให้ทำงานต่อได้อย่างเดิมเสมอ)
+export function depthFromRootFile(rootJson) {
+  const d = Number(rootJson?.depth);
+  return Number.isInteger(d) && d >= 1 && d <= 12 ? d : MERKLE_DEPTH;
 }

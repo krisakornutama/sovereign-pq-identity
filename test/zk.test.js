@@ -4,11 +4,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { randomBytes } from 'node:crypto';
-import { loadPoseidon, buildTree, pathFor, newMemberSecret, MERKLE_DEPTH, MAX_MEMBERS } from '../src/merkle.js';
-import { proveMembership, verifyMembership, artifactsReady, loadNullifierLedger, isNullifierSpent, appendNullifier, proveBalance, verifyBalance, artifactsReadyBalance } from '../src/zk.js';
+import { loadPoseidon, buildTree, pathFor, newMemberSecret, MERKLE_DEPTH, MAX_MEMBERS, DEEP_DEPTH } from '../src/merkle.js';
+import { proveMembership, verifyMembership, artifactsReady, loadNullifierLedger, isNullifierSpent, appendNullifier, proveBalance, verifyBalance, artifactsReadyBalance, artifactsReadyDeep, artifactsReadyBalanceDeep, ARTIFACTS_DEEP, ARTIFACTS_BALANCE_DEEP, CIRCUIT } from '../src/zk.js';
 
 const READY = artifactsReady();
 const READY_BAL = artifactsReadyBalance();
+const READY_DEEP = artifactsReadyDeep();
+const READY_BAL_DEEP = artifactsReadyBalanceDeep();
 
 test('merkle: ลำดับใบต่างกัน → รากต้องต่างกัน (canonical เสถียร)', async () => {
   const poseidon = await loadPoseidon();
@@ -132,4 +134,99 @@ test('zk-balance: แท็กโดเมนแยกชัด — nullifier �
   const poseidon = await loadPoseidon();
   const epoch = 20261109n;
   assert.notEqual(poseidon.nullifierOf(42n, epoch), poseidon.balanceNullifierOf(42n, epoch)); // แท็ก 2 vs 11
+});
+
+// ==== v1.5: โปรไฟล์ลึก D=5 (32 ช่อง) ====
+
+test('merkle D=5: ความจุ 32 ช่อง · padding เต็มและรากเสถียร', async () => {
+  const poseidon = await loadPoseidon();
+  const t = buildTree([123n], poseidon, { depth: DEEP_DEPTH });
+  assert.equal(t.levels[0].length, 2 ** DEEP_DEPTH); // 32
+  assert.equal(t.depth, DEEP_DEPTH);
+});
+
+test('zk D=5: พิสูจน์สมาชิกจริงโปรไฟล์ลึก → ตรวจผ่านด้วย vkey D=5', { skip: !READY_DEEP && 'ยังไม่มี artifacts D=5 (wasm/zkey/vkey)' }, async () => {
+  const poseidon = await loadPoseidon();
+  const secrets = Array.from({ length: 10 }, () => newMemberSecret(randomBytes));
+  const c = secrets.map((s) => poseidon.leafOf(s));
+  const tree = buildTree(c, poseidon, { depth: DEEP_DEPTH });
+  const path = pathFor(tree, 9);
+  const epoch = 20261109n;
+  const { proof, publicSignals } = await proveMembership({ secret: secrets[9], path, root: tree.root, epoch, artifacts: ARTIFACTS_DEEP });
+  // ผู้ตรวจใช้ vkey D=5
+  const ok = await verifyMembership({ proof, publicSignals, vkeyPath: 'artifacts/membership_d5_vkey.json' });
+  assert.equal(ok, true);
+  assert.equal(publicSignals.epochNonce, '20261109');
+});
+
+test('zk-balance D=5: พิสูจน์ยอดจริงโปรไฟล์ลึก → ตรวจผ่านด้วย vkey D=5', { skip: !READY_BAL_DEEP && 'ยังไม่มี artifacts balance D=5' }, async () => {
+  const poseidon = await loadPoseidon();
+  const balances = [50_000n, 500_000n, 1_200_000n];
+  const blindings = balances.map(() => newMemberSecret(randomBytes));
+  const commitments = balances.map((b, i) => poseidon.balanceLeafOf(b, blindings[i]));
+  const tree = buildTree(commitments, poseidon, { depth: DEEP_DEPTH });
+  const epoch = 20261109n;
+  const threshold = 100_000n;
+  const { proof, publicSignals } = await proveBalance({ balance: balances[1], blinding: blindings[1], path: pathFor(tree, 1), root: tree.root, epoch, threshold, artifacts: ARTIFACTS_BALANCE_DEEP });
+  const ok = await verifyBalance({ proof, publicSignals, vkeyPath: 'artifacts/balance_d5_vkey.json' });
+  assert.equal(ok, true);
+  assert.equal(publicSignals.threshold, '100000');
+  assert.ok(!Object.values(publicSignals).includes('500000'));
+});
+
+test('zk cross-vkey: ใบพิสูจน์ D=4 ตรวจด้วย vkey D=5 → ต้องปฏิเสธ', { skip: !READY || !READY_DEEP && 'ต้องมี artifacts ทั้ง D=4 และ D=5' }, async () => {
+  const poseidon = await loadPoseidon();
+  const secrets = [100n, 200n];
+  const c = secrets.map((s) => poseidon.leafOf(s));
+  const tree = buildTree(c, poseidon, { depth: MERKLE_DEPTH });
+  const epoch = 20261109n;
+  // พิสูจน์ด้วย artifacts D=4
+  const { proof, publicSignals } = await proveMembership({ secret: secrets[1], path: pathFor(tree, 1), root: tree.root, epoch });
+  // ตรวจด้วย vkey D=5 (ต้องล้มเหลวเพราะวงจรต่างกัน = constraints ต่างกัน)
+  const ok = await verifyMembership({ proof, publicSignals, vkeyPath: 'artifacts/membership_d5_vkey.json' });
+  assert.equal(ok, false);
+});
+
+test('zk cross-vkey: ใบพิสูจน์ D=5 ตรวจด้วย vkey D=4 → ต้องปฏิเสธ', { skip: !READY || !READY_DEEP && 'ต้องมี artifacts ทั้ง D=4 และ D=5' }, async () => {
+  const poseidon = await loadPoseidon();
+  const secrets = [100n, 200n, 300n];
+  const c = secrets.map((s) => poseidon.leafOf(s));
+  const tree = buildTree(c, poseidon, { depth: DEEP_DEPTH });
+  const epoch = 20261109n;
+  // พิสูจน์ด้วย artifacts D=5
+  const { proof, publicSignals } = await proveMembership({ secret: secrets[2], path: pathFor(tree, 2), root: tree.root, epoch, artifacts: ARTIFACTS_DEEP });
+  // ตรวจด้วย vkey D=4 (ต้องล้มเหลว)
+  const ok = await verifyMembership({ proof, publicSignals, vkeyPath: 'artifacts/membership_vkey.json' });
+  assert.equal(ok, false);
+});
+
+test('zk cross-circuit: ใบพิสูจน์ membership ตรวจด้วย vkey balance → ต้องปฏิเสธ', { skip: !READY || !READY_BAL && 'ต้องมี artifacts ทั้งสองวงจร' }, async () => {
+  const poseidon = await loadPoseidon();
+  const secrets = [100n, 200n];
+  const c = secrets.map((s) => poseidon.leafOf(s));
+  const tree = buildTree(c, poseidon);
+  const epoch = 20261109n;
+  const { proof, publicSignals } = await proveMembership({ secret: secrets[1], path: pathFor(tree, 1), root: tree.root, epoch });
+  // ตรวจ membership proof ด้วย balance vkey (ต้องล้มเหลว)
+  const ok = await verifyMembership({ proof, publicSignals, vkeyPath: 'artifacts/balance_vkey.json' });
+  assert.equal(ok, false);
+});
+
+test('zk cross-circuit: ใบพิสูจน์ balance ตรวจด้วย vkey membership → ต้องปฏิเสธ (error หรือ false)', { skip: !READY || !READY_BAL && 'ต้องมี artifacts ทั้งสองวงจร' }, async () => {
+  const poseidon = await loadPoseidon();
+  const balances = [500_000n];
+  const blindings = [newMemberSecret(randomBytes)];
+  const commitments = balances.map((b, i) => poseidon.balanceLeafOf(b, blindings[i]));
+  const tree = buildTree(commitments, poseidon);
+  const epoch = 20261109n;
+  const threshold = 100_000n;
+  const { proof, publicSignals } = await proveBalance({ balance: balances[0], blinding: blindings[0], path: pathFor(tree, 0), root: tree.root, epoch, threshold });
+  // ตรวจ balance proof ด้วย membership vkey (ต้องล้มเหลว — public signals จำนวนไม่ตรง จะได้ error หรือ false)
+  let ok = false;
+  try {
+    ok = await verifyBalance({ proof, publicSignals, vkeyPath: 'artifacts/membership_vkey.json' });
+  } catch {
+    ok = false;
+  }
+  assert.equal(ok, false);
 });

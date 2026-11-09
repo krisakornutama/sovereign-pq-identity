@@ -1,6 +1,6 @@
 {
   "name": "sovereign-pq-identity",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Post-Quantum Identity for Sovereign OS — pseudonymous identity + dual-signed receipts (Ed25519 + ML-DSA-44, FIPS 204) + optional third layer SLH-DSA (FIPS 205) with key rotation + ZK-SNARK proofs: anonymous membership & balance threshold (Groth16). Offline-first, zero cloud.",
   "main": "cli.js",
   "type": "module",
