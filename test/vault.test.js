@@ -17,7 +17,7 @@ test('vault: ตัวตนเข้ารหัส→ถอดรหัสก�
   assert.deepEqual(opened, identity);
 });
 
-test('vault: passphrase ผิด → ปฏิเสธ (ไม่และแก้ไขเงียบ ๆ)', () => {
+test('vault: passphrase ผิด → ปฏิเสธ (ไม่เงียบเฉย)', () => {
   const identity = createIdentity({ label: 't-vault-wrong' });
   const vault = createVault(identity, PASS, { params: PARAMS_FAST });
   assert.throws(() => openVault(vault, 'wrong-passphrase-'));
@@ -32,7 +32,7 @@ test('vault: แฟ้มถูกแก้ 1 บิต (ciphertext) → authTag
   assert.throws(() => openVault(tampered, PASS));
 });
 
-test('vault: ต้องมีพารามิเตอร์ Argon2id ในแฟ้ม (ตรวจสอบระดับการปลอดภัยได้ตลอด)', () => {
+test('vault: ต้องมีพารามิเตอร์ Argon2id ในแฟ้ม (ตรวจสอบได้ตลอดอายุแฟ้ม)', () => {
   const identity = createIdentity({ label: 't-vault-params' });
   const vault = createVault(identity, PASS, { params: { m: 2048, t: 2, p: 1 } });
   const s = vaultSummary(vault);

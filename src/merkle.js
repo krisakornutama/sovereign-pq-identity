@@ -1,0 +1,80 @@
+// ต้นไม้ Merkle ของสมาชิก — ใช้ Poseidon (BN254) เหมือนกับวงจรเป๊ะ
+// แยกโดเมนด้วยแท็ก: leaf = P([secret, TAG_LEAF, 0]) · node = P([left, right, TAG_NODE]) · nullifier = P([secret, epoch, TAG_NULL])
+// ทุกค่าอยู่ในช่วง BN254 p = 21888…617 (F.p) — การคำนวณฝั่ง JS ให้ได้ค่าตรงกับวงจรทุกขั้น
+
+const _tags = { NODE: 0n, LEAF: 1n, NULL: 2n };
+
+export const MERKLE_DEPTH = 4;      // ต้องตรงวงจร membership.circom (Membership(4) = 16 ใบ)
+export const MAX_MEMBERS = 2 ** MERKLE_DEPTH;
+
+let _poseidonCache = null;
+
+// โหลด Poseidon (circomlibjs — พารามิเตอร์ตรงกับวงจร circomlib)
+// คืน object: leafOf / nodeOf / nullifierOf / F (field BN254 ไว้เทียบค่าตรง ๆ) / raw
+export async function loadPoseidon() {
+  if (_poseidonCache) return _poseidonCache;
+  // circomlibjs เป็น CommonJS — ดึงผ่าน createRequire เพื่อความเสถียรกับ ESM
+  const { createRequire } = await import('node:module');
+  const require = createRequire(import.meta.url);
+  const { buildPoseidon } = require('circomlibjs');
+  const poseidon = await buildPoseidon();
+  const toBig = (limbs) => poseidon.F.toObject(limbs); // Montgomery limbs → BigInt ปกติ
+
+  _poseidonCache = {
+    F: poseidon.F,
+    p: poseidon.F.p,
+    leafOf: (secretBig) => toBig(poseidon([secretBig, _tags.LEAF, 0n])),
+    nodeOf: (left, right) => toBig(poseidon([left, right, _tags.NODE])),
+    nullifierOf: (secretBig, epochBig) => toBig(poseidon([secretBig, epochBig, _tags.NULL])),
+    raw: poseidon,
+  };
+  return _poseidonCache;
+}
+
+// สุ่มกุญแจลับสมาชิก — 248 บิต (ต่ำกว่าโมดูลัส BN254 p ที่ยาว 254 บิต)
+export function newMemberSecret(randomBytesFn) {
+  const buf = randomBytesFn(31); // 248 บิต < BN254 p (254 บิต)
+  return BigInt('0x' + Buffer.from(buf).toString('hex'));
+}
+
+// ต้นไม้คงเส้นคงวา: ลำดับใบ = ลำดับสมาชิก (ใบขาดช่วง ๆ ห้าม) — เติมช่องว่างด้วย 0
+export function buildTree(commitments, poseidon, { depth = MERKLE_DEPTH } = {}) {
+  const leaves = commitments.map((c) => BigInt(c));
+  if (leaves.length > MAX_MEMBERS) {
+    throw new Error(`สมาชิกเกินความจุแผนผัง (${leaves.length} > ${MAX_MEMBERS})`);
+  }
+  while (leaves.length < MAX_MEMBERS) leaves.push(0n); // padding — ใบสมัครเว้นช่องว่าง
+
+  const levels = [leaves];
+  for (let d = 0; d < depth; d++) {
+    const prev = levels[d];
+    const next = [];
+    for (let i = 0; i < prev.length; i += 2) {
+      next.push(poseidon.nodeOf(prev[i], prev[i + 1]));
+    }
+    levels.push(next);
+  }
+  return { depth, levels, root: levels[depth][0] };
+}
+
+// เส้นทางพิสูจน์สมาชิกอันดับ j — รูปร่างตรงกับวงจร (ทุกขั้น: sibling + บิตทิศทาง)
+export function pathFor(tree, index) {
+  const { depth, levels } = tree;
+  if (index < 0 || index >= levels[0].length) throw new Error('อันดับสมาชิกใหญ่กว่า/น้อยกว่าต้นไม้');
+  const elements = [];
+  const indices = [];
+  let idx = index;
+  for (let d = 0; d < depth; d++) {
+    const isRight = idx % 2 === 1;        // 1 = ฉันอยู่ขวา (ต้องส่งพี่น้องฝั่งซ้าย)
+    const sibIdx = isRight ? idx - 1 : idx + 1;
+    elements.push(levels[d][sibIdx]);
+    indices.push(isRight ? 1 : 0);
+    idx = Math.floor(idx / 2);
+  }
+  return { elements, indices };
+}
+
+// มุมมอง commitment สำหรับแฟ้ม JSON — เลขจำนวนใหญ่รูปแบบ string decimal
+export function commitmentView(commitments) {
+  return commitments.map((c, i) => ({ index: i, commitment: c.toString() }));
+}

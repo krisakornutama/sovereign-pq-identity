@@ -7,7 +7,8 @@
 
 [![Standard](https://img.shields.io/badge/Standard-FIPS_204_ML--DSA-fbbf24?style=for-the-badge&labelColor=030712)](https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.204.pdf)
 [![Zero Cloud](https://img.shields.io/badge/Cloud-ZERO-34d399?style=for-the-badge&labelColor=030712)](.)
-[![Tests](https://img.shields.io/badge/Tests-14_passing-22d3ee?style=for-the-badge&labelColor=030712)](#-ผลการทดสอบจากเครื่องจริง)
+[![ZK-SNARK](https://img.shields.io/badge/ZK--SNARK-Groth16_BN254-a855f7?style=for-the-badge&labelColor=030712)](#-️-zk-snark-anonymous-proof-v12--พิสูจน์ว่าเป็นสมาชิกโดยไม่บอกว่าใคร)
+[![Tests](https://img.shields.io/badge/Tests-21_passing-22d3ee?style=for-the-badge&labelColor=030712)](#-ผลการทดสอบจากเครื่องจริง)
 [![Node](https://img.shields.io/badge/Node.js-%E2%89%A520-43853d?style=for-the-badge&labelColor=030712)](./package.json)
 
 </div>
@@ -23,7 +24,13 @@ npm install
 node cli.js keygen "ชื่อเรียกเครื่อง"   # สร้างตัวตน + เก็บกุญแจใน Vault เข้ารหัส (ตั้ง passphrase ตอนถาม)
 node cli.js demo        # จำลองขาย → ถอดกุญแจจาก vault → เซ็นสองลายเซ็น → ตรวจ → ลงคลัง
 node cli.js selftest    # ทดสอบการบุกรุก 7 เคส (สลิป + vault)
-npm test                # ชุดทดสอบเต็ม 14 เคส (ไม่ใช้เน็ต)
+npm test                # ชุดทดสอบเต็ม 21 เคส (ไม่ใช้เน็ต)
+
+# ZK-SNARK (v1.2) — พิสูจน์ว่าเป็นสมาชิกกลุ่ม โดยไม่บอกว่าใคร
+node cli.js zk enroll "กลุ่มซื้อฟาร์ม A"   # สมัครสมาชิก (กุญแจลับเข้า vault เข้ารหัสเท่านั้น)
+node cli.js zk tree                        # รวมรากกลุ่ม → data/members_root.json
+node cli.js zk prove "กลุ่มซื้อฟาร์ม A"    # สร้างใบพิสูจน์นิรนาม (nullifier กันใช้ซ้ำ)
+node cli.js zk verify data/zk-receipt-<epoch>.json   # ฝั่งผู้ตรวจ: ใช้ vkey เท่านั้น ไม่แตะกุญแจ
 ```
 
 **เอาต์พุตจริงตอนรัน `node cli.js demo` (คัดจากเครื่องที่สร้างระบบนี้เอง):**
@@ -53,6 +60,7 @@ npm test                # ชุดทดสอบเต็ม 14 เคส (ไ
 | 💾 | **คลังใบเสร็จท้องถิ่น** | แฟ้ม JSONL + กันซ้ำตาม `id` (ยื่นใบเดิมซ้ำไม่เกิดรายการใหม่ — ระบบเดียวแบบ `sovereign-offgrid`) |
 | 🔒 | **Domain separation** | ลายเซ็น ML-DSA ผูก context `"sovereign-pq-receipt/v1"` — ลายเซ็นจากระบบอื่นใช้ต่อในแฟ้มของระบบนี้ไม่ได้ |
 | 🛡 | **Local Key Vault** | กุญแจ secret **ไม่เก็บ plaintext** — เก็บเป็น vault เข้ารหัส **Argon2id (RFC 9106) + AES-256-GCM** ถอดขึ้นหน่วยความจำเฉพาะตอนเซ็นสลิปเท่านั้น |
+| 🕶️ | **ZK-SNARK ยอมรับกลุ่มโดยไม่รู้ว่าใคร (v1.2)** | พิสูจน์ "อยู่ในกลุ่มสมาชิก" ต่อ POS/ผู้ตรวจด้วย **Groth16 + Poseidon Merkle + nullifier** — ผู้ตรวจไม่เห็นทั้งกุญแจและตำแหน่งในต้นไม้ ตรวจด้วย **vkey ล้วน** และกันใช้สิทธิ์ซ้ำรายคนต่อรอบ |
 
 ---
 
@@ -160,6 +168,83 @@ $ node cli.js vault remove-plain
 
 ---
 
+## 🕶️ ZK-SNARK Anonymous Proof (v1.2) — พิสูจน์ว่าเป็นสมาชิก โดยไม่บอกว่าใคร
+
+รุ่น v1.2 เพิ่มระดับที่ลายเซ็นธรรมดาทำไม่ได้: ยืนยันต่อ POS/ผู้ตรวจว่า **"ผู้ถือสิทธิ์อยู่ในกลุ่มสมาชิกที่ลงทะเบียนไว้"** — โดยไม่เปิดเผยกุญแจ ไม่เปิดเผยตำแหน่งในต้นไม้สมาชิก และไม่เกิดการใช้สิทธิ์ซ้ำ
+
+**วงจรจริง:** `circuits/membership.circom` — Groth16 บนเส้นโค้ง **BN254** · แฮชแผนผังทั้งหมดด้วย **Poseidon**(circomlib — SNARK-friendly) · ความลึก D=4 → ความจุ 16 สมาชิก · คอมไพล์จาก circom 2.2.3 → **1,592 non-linear + 2,054 linear constraints**
+
+| ตัวแปรของวงจร | ฝั่งจากใคร | ผู้ตรวจเห็นได้เหลือเกิน |
+|---|---|---|
+| `identitySecret` · `pathElements[4]` · `pathIndices[4]` | **private** — อยู่ในหน่วยความจำเครื่องผู้พิสูจน์เท่านั้น | ✗ ไม่เห็นเลย |
+| `merkleRoot` (รากทะเบียนกุมสิทธิ์) · `epochNonce` (หมายเลขรอบ กัน replay) | **public input** | ✓ เห็น |
+| `nullifierHash` = Poseidon(`identitySecret`, `epochNonce`, TAG_NULL) | **output สาธารณะ** | ✓ เห็น — รู้ว่า "สิทธิถูกใช้แล้ว" แต่ไม่รู้ว่าใคร |
+
+การแยกหน้าที่ชัดกันทุกขั้นด้วยแท็กโดเมน (LEAF / NODE / NULL) — แฮชจากขั้นหนึ่งถ่ายไปแทนอีกขั้นไม่ได้ · **nullifier ทำหน้าที่กัน double-claim**: ใบเดียวกันในรอบเดียวกัน (epoch) ยื่นซ้ำจะถูกจากคลัง nullifier ฝั่งผู้ตรวจ
+
+**เอาต์พุตจริงจาก CLI บนเครื่องสร้างระบบ (กระบวนการครบวงจร):**
+
+```
+$ node cli.js zk enroll "กลุ่มซื้อฟาร์ม A"
+✓ คลังสมาชิกสร้างใหม่ (เข้ารหัสแบบเดียวกับกุญแจตัวตน: Argon2id + AES-256-GCM)
+✓ ลงทะเบียนสมาชิก "กลุ่มซื้อฟาร์ม A" สำเร็จ (อันดับ 0)
+  commitment (สาธารณะ): 0x260144f1c5a70db9a035…
+  (กุญแจลับอยู่ใน data/membership.vault.json — แฟ้มทะเบียนไม่มีข้อมูลลับ)
+
+$ node cli.js zk tree
+✓ รากสมาชิก (merkleRoot): 0xd5a49d1c5d9a69affd9a2e63…
+  สมาชิก 2 จากความจุสูงสุด 16 (ช่องว่างเติมด้วยค่า 0 ครบทุกชั้น …)
+
+$ node cli.js zk prove "กลุ่มซื้อฟาร์ม B"
+พิสูจน์นิรนาม (กุญแจลับอยู่ในหน่วยความจำระหว่างคำนวณเท่านั้น)…
+✓ พิสูจน์สำเร็จ → data/zk-receipt-20261109.json
+  ใบพิสูจน์  : pqri_anon_255f9900  ·  epoch: 20261109
+  nullifier : 0x255f99001e8e1dcc…  (ผู้ตรวจบันทึกไว้กันซ้ำ — ไม่ออกตัวตน)
+  ราก       : 0xd5a49d1c5d9a69af…
+
+$ node cli.js zk verify data/zk-receipt-20261109.json
+✓ ใบพิสูจน์ถูกต้อง (vkey ตรวจผ่าน · กุญแจเจ้าของไม่ถูกเปิดเผย)
+  nullifier : 0x255f99001e8e1dcc…  → บันทึกกันซ้ำแล้ว (0 รายการ)
+  margin: ใบเดียวกันรอบเดียวกันใช้ซ้ำไม่ได้อีก — epoch ใหม่คือสิทธิ์ใหม่
+
+$ node cli.js zk verify data/zk-receipt-20261109.json     # ยื่นซ้ำ
+✗ สิทธิ์รอบนี้ถูกใช้ไปแล้ว (nullifier ซ้ำ) — ปฏิเสธแม้ proof ยังถูกต้องตามวงจร   (exit 1)
+```
+
+**ขั้นพิสูจน์จริงที่ไม่มีข้อมูลจำลอง:** prove โดยไม่มีกุญแจจาก vault ไม่ได้ผล (CLI ตรวจซ้ำว่า hash ของกุญแจ secret ตรง commitment ที่ลงทะเบียนไว้ก่อนลงมือพิสูจน์เสมอ) · แก้ `pi_c` 1 ค่า → verify false · กุญแจปลอม → วงจรปฏิเสธตั้งแต่ทำ witness · ตรวจย้อนข้ามเครื่องทั่วไปด้วยคำสั่งมาตรฐาน: `npx snarkjs groth16 verify artifacts/membership_vkey.json <public.json> <proof.json>` → `OK!`
+
+**การใช้แฟ้มวงจร**: ชุดที่ใช้แล้วบันทึกไว้ใน `artifacts/` ทั้งหมด (**`membership.wasm` 1.86 MB · `membership.zkey` 1.50 MB · `membership_vkey.json` 3.2 KB**) — ฝั่งผู้พิสูจน์ใช้ wasm+zkey ฝั่งผู้ตรวจต้องมี **vkey เท่านั้น** (ไม่ต้องมี zkey ไม่ต้องมีกุญแจสมาชิก)
+
+### การสร้างแฟ้มวงจร (เมื่อต้องการออกวงจรใหม่หรือกลุ่มใหญ่ขึ้น — ทำครั้งเดียวต่อวงจร)
+
+```bash
+# คอมไพล์วงจร (circom v2.2.3 — ดาวน์โหลด binary จาก release ของ iden3/circom ไว้ .tools/)
+.tools/circom.exe circuits/membership.circom --wasm --r1cs -o build -l node_modules
+
+# Powers of Tau + Groth16 setup — entropy มาจากตัวเครื่องเราเองทั้งหมด (ไม่โหลดจากที่ไหน)
+npx snarkjs powersoftau new bn128 14 build/pot14_0000.ptau -v
+npx snarkjs powersoftau contribute build/pot14_0000.ptau build/pot14_0001.ptau --name="local" -v -e="<ข้อความสุ่มยาวของเครื่องนี้ — ไหมทำเป็นหมายเลขประจำตัวที่จดไว้/เปิดเผย>"
+npx snarkjs powersoftau prepare phase2 build/pot14_0001.ptau build/pot14_final.ptau -v
+npx snarkjs powersoftau verify build/pot14_final.ptau               # → "Powers of Tau Ok!"
+npx snarkjs groth16 setup build/membership.r1cs build/pot14_final.ptau build/membership_0000.zkey
+npx snarkjs zkey contribute build/membership_0000.zkey build/membership_final.zkey --name="local" -v -e="<ข้อความสุ่มอีกชุด>"
+npx snarkjs zkey verify build/membership.r1cs build/pot14_final.ptau build/membership_final.zkey   # → "ZKey Ok!"
+npx snarkjs zkey export verificationkey build/membership_final.zkey artifacts/membership_vkey.json
+
+# ทำแฟ้มให้ artifacts/ (ผู้ตรวจถูกต้องด้วย vkey; ใน repo นี้แนบชุดให้แล้ว)
+cp build/membership_js/membership.wasm artifacts/membership.wasm
+cp build/membership_final.zkey artifacts/membership.zkey
+```
+
+### ข้อจำกัดที่ควรรู้ก่อนพาไปใช้จริง (ตามความจริง)
+
+- ⚙️ **Trusted setup ครั้งเดียวแบบฝ่ายเดียว** — powersoftau/zkey ของ repo นี้สร้างในเครื่องเดียว (entropy ในเครื่องล้วน) ทุกเครื่องตรวจได้เพราะมี vkey กับรากเดียวกัน แต่การเชื่อว่า zkey ไม่มี "ปีกความรู้ข้างเครื่องสร้าง" คือความเชื่อมั่นที่พึงถือเครื่องสร้าง; สำหรับระบบสาธารณะเต็มจริงแค่บัญชีส่วนท้ายต้องทำ ceremony หลายฝ่าย — นี่คือจุดแชร์เปิดศักดิ์สิทธิ์อย่างตรงไปตรงมา
+- 🧮 **ความจุกลุ่ม 16 สมาชิกต่อใบราก** (D=4) — กลุ่มใหญ่ขึ้นต้องออกวงจรลึกขึ้น (D=5 → 32 คน) และ generate/setup ใหม่ทั้งชุด; ช่องว่างใบตองด้วย 0 — ปลอมพิสูจน์ด้วยช่องว่างไม่ได้เพราะวงจรสร้าง leaf จาก `identitySecret` ตลอด (หักหลังกลับค่า 0 ผ่าน hash preimage ถือว่าไม่เอาอย่างเข้มขัดกว่าการปลอมกุญแจแบบทั่วไป) 
+- 📅 **1 คน = 1 สิทธิ์ / 1 epoch** — คลัง nullifier ที่ `data/nullifiers.jsonl` เก็บฝั่งผู้ตรวจ (ลำดับ event log) · ยากแต่ควรเป็นอนัมภัย: ผู้ตรวจควร pin แฟ้มรากตามวัน (`data/members_root.json มี`generated_at`) — รากใหม่เมื่อกลุ่มเปลี่ยน· สิทธิ์ใบแถวยังตรวจกับรากตาม epoch ที่ประกาศไว้อย่างเห็น
+- 🐢 **snarkjs คืน worker ไว้ใน event loop** — หลัง prove/verify จริงเนื่องภายในไฟล์ต่อเนื่องจะยังย่านว่าถึงกระบวนจบเร็ว ๆ แต่ในขั้นของ "ชุดลงทุนทดสอบ" รวม `npm test` รันด้วย `--test-force-exit` (built-in Node ≥22.8) เพื่อบังคับจบให้ผลครบ — หลักเตลิดตามทุกคำสั่ง CLI ที่ทำงาน prove/verify สั่ง `process.exit()` หลังเขียนแฟ้มเสร็จ
+
+---
+
 ## ✅ ผลการทดสอบจากเครื่องจริง
 
 ```
@@ -171,15 +256,22 @@ $ npm test
 ✔ ตัดลายเซ็น ML-DSA ออก → ระบบไม่ตอบรับ
 ✔ เอาลายเซ็นมาจากใบอื่นมาแปะ → ไม่ผ่าน
 ✔ id/issued_at อยู่ใน core bytes ที่เซ็น และลายเซ็นไม่หลุดเข้าฟีเจอร์เอง
-✔ context ต้องตรงเดิม → ML-DSA verify ไม่ผ่าน
+✔ context ต้องตรงเดิมเป๊ะ (โดเมนแยก) → ML-DSA verify ไม่ผ่าน
 ✔ vault: ตัวตนเข้ารหัส→ถอดรหัสกลับได้ตรงกัน
-✔ vault: passphrase ผิด → ปฏิเสธ (ไม่เงียบมันเอง)
+✔ vault: passphrase ผิด → ปฏิเสธ (ไม่เงียบเฉย)
 ✔ vault: แฟ้มถูกแก้ 1 บิต (ciphertext) → authTag ตรวจไม่ผ่าน
-✔ vault: มีพารามิเตอร์ Argon2id ในแฟ้ม (ตรวจสอบได้ตลอด)
+✔ vault: ต้องมีพารามิเตอร์ Argon2id ในแฟ้ม (ตรวจสอบได้ตลอดอายุแฟ้ม)
 ✔ vault → signReceipt: ถอดกุญแจจาก vault แล้วเซ็นได้ + ตรวจผ่านทั้งคู่
 ✔ vault: passphrase สั้นเกิน 8 ตัว → ปฏิเสธตั้งแต่ตอนสร้าง
+✔ merkle: ลำดับใบต่างกัน → รากต้องต่างกัน (canonical เสถียร)
+✔ merkle: สมาชิกน้อยกว่าความจุ → padding เต็มช่องและรากยังเสถียร
+✔ merkle: รากจากเส้นทาง member#2 ไต่ขึ้นเทียบรากตรงกัน (indices เป็นบิตจริง)
+✔ zk: พิสูจน์สมาชิกจริง → ตรวจผ่านโดยไม่รู้กุญแจ (วงจรจริง)
+✔ zk: แก้ proof 1 บิต → ตรวจไม่ผ่าน
+✔ zk: สมาชิกที่ไม่อยู่ในกลุ่ม → วงจรปฏิเสธที่ witness (ไม่มี proof ออกมา)
+✔ zk: nullifier เดียวกันใช้ซ้ำรอบเดียวกัน = ตรวจพบ (double-claim)
 
-ℹ tests 14 · pass 14 · fail 0
+ℹ tests 21 · pass 21 · fail 0 · duration 4.3 s
 ```
 
 ```
@@ -212,8 +304,9 @@ repo นี้คือ**ชั้นตรวจสอบอัตลักษ�
 
 | เฟส | งาน | สถานะ |
 |---|---|---|
-| ✅ **เสร็จแล้ววันนี้** | ตัวตนนิรนาม + สองลายเซ็น (Ed25519 + ML-DSA-44) + คลัง idempotent + **Local Key Vault (Argon2id + AES-256-GCM)** + ทดสอบ 14/14 | พร้อมใช้ |
-| 🧩 **เฟส 2** | **ZK จริง: พิสูจน์โดยไม่เปิดเผยข้อมูล** (ZK-SNARK / ZK-STARK — ยืนยันสิทธิ์โดยไม่ต้องบอกว่าคุณคือใคร) | วางแผนถัดไป |
+| ✅ **v1.0–v1.1** | ตัวตนนิรนาม + สองลายเซ็น (Ed25519 + ML-DSA-44) + คลัง idempotent + **Local Key Vault (Argon2id + AES-256-GCM)** | พร้อมใช้ |
+| ✅ **v1.2 — บังเกตุจากเครื่องจริง** | **ZK-SNARK Anonymous Membership** — วงจรจริง Groth16 (Poseidon Merkle + nullifier กันใช้ซ้ำ) · CLI `zk enroll/list/tree/prove/verify` · ตรวจด้วย vkey ล้วน · 21/21 ทดสอบ | พร้อมใช้ |
+| 🧩 **เฟสถัดไป** | **Balance Threshold Proof** — พิสูจน์ว่ายอด/สิทธิ์เพียงพอโดยไม่เผยตัวเลขจริง (ต่อยอดวงจรเดียวกัน) | วางแผน |
 | 🧊 **เฟส 3** | ลายเซ็นชุดเสริม (SLH-DSA / Falcon) + ระบบหมุนเวียนกุญแจอัตโนมัติ | วางแผน |
 | 🔊 **เฟส 4** | เข้ารหัสแบบด้าน ML-KEM (FIPS 203) สำหรับแฟ้มที่ส่งระหว่างโหนด | วางแผน |
 
@@ -222,6 +315,7 @@ repo นี้คือ**ชั้นตรวจสอบอัตลักษ�
 ## ⚠️ ความจริงระยะตรง — อ่านก่อนใช้จริง
 
 - 🔏 **กุญแจ secret เก็บใน vault เข้ารหัสตั้งแต่ v1.1** — หากยังใช้แฟ้ม plaintext เก่า (v1.0) ให้ migrate ด้วย `node cli.js vault create` ตามด้วย `vault remove-plain` ทันที — ระบบขอ passphrase แบบพิมพ์ซ่อนอักษร · **ลืม passphrase = ไม่มีทางกู้คืนกุญแจ** (ตามหลัก vault: กุญแจเสีย ตัวตนต้องสร้างใหม่) ทางต่อยอดถัดไป: เชื่อม OS keychain (macOS Keychain / Windows DPAPI / Linux Secret Service)
+- 🕶️ **ระดับ ZK-SNARK (v1.2)** — กุญแจลับสมาชิกอยู่ใน vault เข้ารหัสแยกชุดเดียวกัน (`data/membership.vault.json` · passphrase แยกต่างจากตัวตน) · trusted setup สร้างแน่ในเครื่องเดียวและกลุ่มจำกัด 16 สมาชิกต่อราก — รายละเอียดข้อจำกัดฉบับเต็มอยู่ในหัวข้อ ZK ข้างบน; แฟ้มทะเบียนสมาชิกที่ส่งผู้ตรวจ (`members.json` + `members_root.json`) **ไม่มีข้อมูลลับใด ๆ**
 - 🌐 **บนเบราว์เซอร์ (Web Crypto) ยังไม่รองรับ ML-DSA** — ระบบนี้วิ่งบน Node.js เป็นหลัก ส่วนฝั่งเบราว์เซอร์จะต้องใส่ไลบรารี JS/WASM อีกชั้น (จะเพิ่มเป็นเวอร์ชันเสริม)
 - 🧪 **สำหรับภารกิจระดับธนาคาร/การแพทย์** — โค้ดระบบนี้เป็นระบบนำพิสูจน์แนวทาง; ก่อนนำไปใช้ระดับ production จริง ควรให้ผู้เชี่ยวชาญตรวจโค้ด (code audit) หรือใช้ liboqs เวอร์ชันที่ผ่านการตรวจแทน
 - 🧾 ทุกชิ้นรันในเครื่อง · **ไม่ส่งข้อมูลจากเครื่องออกไปที่ไหน** — `npm install` ต้องเน็ตครั้งเดียวตอนติดตั้ง; หลังจากนั้นระบบทำงาน offline 100%

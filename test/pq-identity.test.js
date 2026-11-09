@@ -71,7 +71,7 @@ test('id/issued_at อยู่ใน core bytes ที่เซ็น และ
   assert.equal(text.includes('alg_profile'), true);
 });
 
-test('context กันโดเมนยิงไม่ตรงเดิม → ML-DSA verify ไม่ผ่าน', () => {
+test('context ต้องตรงเดิมเป๊ะ (โดเมนแยก) → ML-DSA verify ไม่ผ่าน', () => {
   // โดม別: เซ็นในเน้ schema เดิมแต่ verify เอา context สายที่ไม่ตรง → ต้อง fail
   const id = createIdentity({ label: 't-ctx' });
   const env = signReceipt(id, { demo: true });

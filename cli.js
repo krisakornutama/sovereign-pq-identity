@@ -9,10 +9,16 @@ import { appendReceipt, listReceipts } from './src/ledger.js';
 import { createVault, openVault, vaultSummary } from './src/vault.js';
 import { readPassphrase, passphraseFromEnv } from './src/password.js';
 import { canonical } from './src/util.js';
+import { loadPoseidon, buildTree, pathFor, newMemberSecret, MAX_MEMBERS } from './src/merkle.js';
+import { proveMembership, verifyMembership, anonReceipt, loadNullifierLedger, isNullifierSpent, appendNullifier, artifactsReady } from './src/zk.js';
+import { randomBytes } from 'node:crypto';
 
 const IDENT = 'data/identity.json';
 const VAULT = 'data/identity.vault.json';
 const LEDGER = 'data/receipts.jsonl';
+const MEMBERS = 'data/members.json';          // สาธารณะ: ชื่อเรียก + commitment (ไม่มีกุญแจลับ) — data/ ทั้งหมดอยู่นอก git
+const MVAULT = 'data/membership.vault.json';  // เข้ารหัส: กุญแจลับสมาชิก (Argon2id + AES-256-GCM เดียวกับกุญแจตัวตน)
+const NULLIFIER_LEDGER = 'data/nullifiers.jsonl'; // คลังฝั่งผู้ตรวจ — nullifier ที่ใช้แล้ว (กัน double-claim)
 const C = { g: (s) => `\x1b[32m${s}\x1b[0m`, y: (s) => `\x1b[33m${s}\x1b[0m`, r: (s) => `\x1b[31m${s}\x1b[0m`, b: (s) => `\x1b[36m${s}\x1b[0m`, dim: (s) => `\x1b[2m${s}\x1b[0m` };
 
 const [cmd, ...rest] = process.argv.slice(2);
@@ -156,6 +162,8 @@ if (cmd === 'keygen') {
       '  node cli.js vault remove-plain ลบแฟ้ม plaintext หลัง vault พร้อม',
     ].join('\n'));
   }
+} else if (cmd === 'zk') {
+  await zkNamespace(rest);
 } else if (cmd === 'selftest') {
   // ทุกเคสใช้ข้อมูลจำลองล้วน — ไม่แตะแฟ้ม + คลังจริง
   const id = createIdentity({ label: 'selftest' });
@@ -195,5 +203,183 @@ if (cmd === 'keygen') {
   node cli.js vault open                    ทดสอบเปิด vault
   node cli.js vault remove-plain            ลบ plaintext หลัง vault พร้อม
 
-  สำหรับ automation (หลีกเลี่ยง prompt): กำหนด SOVEREIGN_PASSPHRASE=... ก่อนคำสั่ง`);
+  สำหรับ automation (หลีกเลี่ยง prompt): กำหนด SOVEREIGN_PASSPHRASE=... ก่อนคำสั่ง
+
+  ZK-SNARK (นิรนามแท้ — เฟส 2):
+  node cli.js zk enroll "ชื่อสมาชิก"          ลงทะเบียนสมาชิก (กุญแจลับเข้า vault, ลง commitment สาธารณะ)
+  node cli.js zk list                         อ่านทะเบียน (เห็น commitment เท่านั้น ไม่มีตัวตน)
+  node cli.js zk tree                         คำนวณรากสมาชิก + เขียน data/members_root.json
+  node cli.js zk prove "ชื่อสมาชิก" [epoch]   พิสูจน์นิรนาม → แฟ้มใบพิสูจน์ data/zk-receipt-<epoch>.json
+  node cli.js zk verify <แฟ้มใบพิสูจน์.json>  ฝั่งโหนดตรวจ: vkey ล้วน + กัน nullifier ซ้ำ (exit 0 = ผ่าน)
+
+  สำหรับ automation (หลีกเลี่ยง prompt): กำหนด SOVEREIGN_MEMBER_PASS=... สำหรับ vault สมาชิก`);
+}
+
+// ==== ZK-SNARK Anonymous Membership — ตัวจัดการคำสั่ง (เฟส 2) ====
+// (เส้นทางแฟ้มทะเบียน/คลังสมาชิกประกาศอยู่บนหัวไฟล์ — รวมชุดเดียวกับแฟ้มกุญแจตัวตน)
+
+function todayEpoch() {
+  const d = new Date();
+  return Number(`${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, '0')}${String(d.getUTCDate()).padStart(2, '0')}`);
+}
+
+async function zkNamespace(rest) {
+  const sub = rest[0] || 'help';
+
+  // แฟ้มทะเบียนสมาชิกสาธารณะ
+  const readMembersPublic = () => (fs.existsSync(MEMBERS) ? JSON.parse(fs.readFileSync(MEMBERS, 'utf8')) : []);
+  const writeMembersPublic = (arr) => { fs.mkdirSync('data', { recursive: true }); fs.writeFileSync(MEMBERS, JSON.stringify(arr, null, 2)); };
+
+  // เปิด vault สมาชิก — คืน { data, passphrase } เพื่อใช้ passphrase เดิมบันทึกต่อได้ทันที (จะถามแค่ครั้งเดียว)
+  const openMemberVault = async (needCreate) => {
+    let passphrase = process.env.SOVEREIGN_MEMBER_PASS || '';
+    if (!passphrase) passphrase = await readPassphrase(needCreate ? '  ตั้ง passphrase สมาชิก (ต่ำสุด 8 ตัว): ' : '  passphrase สมาชิก: ');
+    if (needCreate && passphrase.length < 8) { console.error(C.r('  ✗ passphrase สั้นเกินไป (ต่ำสุด 8 ตัว)')); process.exit(1); }
+    if (needCreate && !fs.existsSync(MVAULT)) {
+      fs.mkdirSync('data', { recursive: true });
+      fs.writeFileSync(MVAULT, JSON.stringify(createVault({ members: [] }, passphrase), null, 2));
+      console.log(C.g('  ✓ คลังสมาชิกสร้างใหม่ (เข้ารหัสแบบเดียวกับกุญแจตัวตน: Argon2id + AES-256-GCM)'));
+    }
+    try {
+      if (!fs.existsSync(MVAULT)) { console.error(C.r('ยังไม่มี ' + MVAULT + ' — รัน node cli.js zk enroll ก่อน')); process.exit(1); }
+      const data = openVault(JSON.parse(fs.readFileSync(MVAULT, 'utf8')), passphrase);
+      if (!data || !Array.isArray(data.members)) throw new Error('โครงแฟ้มคลังสมาชิกไม่ตรง (members ต้องเป็น array)');
+      return { data, passphrase };
+    } catch (e) {
+      console.error(C.r('  ✗ ' + e.message));
+      process.exit(1);
+    }
+  };
+
+  // ดึงกุญแจลับของสมาชิกตามชื่อเรียก — จาก vault เข้ารหัสเท่านั้น ไม่มีทางอื่น
+  const openMemberByLabel = async (label) => {
+    const { data } = await openMemberVault(false);
+    const member = data.members.find((m) => m.label === label);
+    if (!member || !member.secret) { console.error(C.r('ไม่พบกุญแจของสมาชิก "' + label + '" ใน ' + MVAULT + ' — รัน node cli.js zk enroll ก่อน')); process.exit(1); }
+    return member;
+  };
+
+  const saveMemberVault = (data, passphrase) => {
+    fs.writeFileSync(MVAULT, JSON.stringify(createVault(data, passphrase), null, 2));
+  };
+
+  if (sub === 'enroll') {
+    const label = rest[1] || '';
+    if (!label) { console.error(C.r('ใช้งาน: node cli.js zk enroll "ชื่อสมาชิก"')); process.exit(1); }
+    const pub = readMembersPublic();
+    if (pub.some((m) => m.label === label)) { console.error(C.r('ชื่อสมาชิก "' + label + '" ลงทะเบียนแล้ว')); process.exit(1); }
+    const createNew = !fs.existsSync(MVAULT);
+    const needBe = pub.length + 1;
+    if (needBe > MAX_MEMBERS) { console.error(C.r('สมาชิกเต็มความจุวงจร (' + MAX_MEMBERS + ' คน) — ต้องออกวงจรลึกขึ้น')); process.exit(1); }
+
+    const { data: vaultData, passphrase } = await openMemberVault(createNew);
+    // กุญแจลับ 31 ไบต์ (< BN254 p) — ถูกเก็บใน vault เข้ารหัสแบบเดียวกับกุญแจตัวตน
+    const secretBig = newMemberSecret(randomBytes);
+    const poseidon = await loadPoseidon();
+    const commitment = poseidon.leafOf(secretBig);
+    vaultData.members.push({ label, secret: secretBig.toString(16) });
+    saveMemberVault(vaultData, passphrase);
+    pub.push({ label, commitment: commitment.toString(), enrolled_at: new Date().toISOString() });
+    writeMembersPublic(pub);
+    console.log(C.g(`✓ ลงทะเบียนสมาชิก "${label}" สำเร็จ (อันดับ ${pub.length - 1})`));
+    console.log('  commitment (สาธารณะ): ' + C.b(commitment.toString(16).slice(0, 20) + '…'));
+    console.log(C.dim('  (กุญแจลับอยู่ใน ' + MVAULT + ' — แฟ้มทะเบียนไม่มีข้อมูลลับ)'));
+    console.log(C.y('  ✍ ต่อไป: node cli.js zk tree  แล้วส่ง data/members.json ให้ผู้ตรวจ (ห้ามส่งแฟ้ม vault)'));
+  } else if (sub === 'list') {
+    const pub = readMembersPublic();
+    console.log(C.g(`ทะเบียนสมาชิก ${pub.length}/${MAX_MEMBERS}:`));
+    for (const [i, m] of pub.entries()) {
+      console.log(`  [${i}] ${C.b(m.label)}  commitment: 0x${BigInt(m.commitment).toString(16).slice(0, 20)}…`);
+    }
+    console.log(C.dim('  (commitment คือ hash ของกุญแจลับ — ตรวจสลิปไม่ปรากฏตัวตน)'));
+  } else if (sub === 'tree') {
+    const pub = readMembersPublic();
+    if (pub.length === 0) { console.error(C.r('ยังไม่มีสมาชิก — enroll ก่อน')); process.exit(1); }
+    const poseidon = await loadPoseidon();
+    const tree = buildTree(pub.map((m) => BigInt(m.commitment)), poseidon);
+    const rootHex = '0x' + tree.root.toString(16);
+    fs.mkdirSync('data', { recursive: true });
+    fs.writeFileSync('data/members_root.json', JSON.stringify({ root: rootHex, members: pub.length, depth: tree.depth, generated_at: new Date().toISOString(), labels: pub.map((m) => m.label) }, null, 2));
+    console.log(C.g('✓ รากสมาชิก (merkleRoot): ' + C.b(rootHex.slice(0, 26) + '…')));
+    console.log('  สมาชิก ' + pub.length + ' จากความจุสูงสุด ' + MAX_MEMBERS + ' (ช่องว่างเติมด้วยค่า 0 ครบทุกชั้น — หมายเหตุการผูกกลุ่มจริงอยู่ใน README)');
+    console.log(C.dim('  แฟ้มราก: data/members_root.json — ผู้ตรวจถือแฟ้มนี้เท่านั้น'));
+  } else if (sub === 'prove') {
+    const label = rest[1] || '';
+    if (!label) { console.error(C.r('ใช้งาน: node cli.js zk prove "ชื่อสมาชิก" [epoch=YYYYMMDD]')); process.exit(1); }
+    const epoch = rest[2] ? Number(rest[2]) : todayEpoch();
+    if (!fs.existsSync('data/members_root.json')) { console.error(C.r('ยังไม่มี data/members_root.json — รัน: node cli.js zk tree')); process.exit(1); }
+    const pub = readMembersPublic();
+    if (!artifactsReady()) { console.error(C.r('ยังไม่มีแฟ้มวงจรใน artifacts/ — ดู README หัวข้อ "การสร้างแฟ้มวงจร"')); process.exit(1); }
+    const idx = pub.findIndex((m) => m.label === label);
+    if (idx < 0) { console.error(C.r('ไม่พบสมาชิก "' + label + '" — รัน node cli.js zk list ดูชื่อที่ลงทะเบียนไว้')); process.exit(1); }
+    const member = await openMemberByLabel(label);
+    const secretBig = BigInt('0x' + member.secret);
+    const poseidon = await loadPoseidon();
+    // กันคลาดเคลื่อนระหว่าง vault กับทะเบียน: กุญแจต้องแฮชออกมาตรง commitment ที่ประกาศไว้เสมอ
+    if (poseidon.leafOf(secretBig) !== BigInt(pub[idx].commitment)) {
+      console.error(C.r('กุญแจใน ' + MVAULT + ' ไม่ตรงกับ commitment ใน ' + MEMBERS + ' — ข้อมูลเหลื่อมกัน ปฏิเสธพิสูจน์'));
+      process.exit(1);
+    }
+    const tree = buildTree(pub.map((m) => BigInt(m.commitment)), poseidon);
+    const path = pathFor(tree, idx);
+    console.log('พิสูจน์นิรนาม (กุญแจลับอยู่ในหน่วยความจำระหว่างคำนวณเท่านั้น)…');
+    const { proof, publicSignals } = await proveMembership({ secret: secretBig, path, root: tree.root, epoch: BigInt(epoch) });
+    const rootView = { members: pub.length };
+    const rec = anonReceipt({ proof, publicSignals, epoch, rootView });
+    fs.mkdirSync('data', { recursive: true });
+    const file = 'data/zk-receipt-' + epoch + '.json';
+    fs.writeFileSync(file, JSON.stringify(rec, null, 2));
+    console.log(C.g('✓ พิสูจน์สำเร็จ → ' + file));
+    console.log('  ใบพิสูจน์  : ' + C.b(rec.receiptId) + '  ·  epoch: ' + epoch);
+    console.log('  nullifier : ' + C.b(rec.publicSignals.nullifierHash.slice(0, 18) + '…') + C.dim('  (ผู้ตรวจบันทึกไว้กันซ้ำ — ไม่ออกตัวตน)'));
+    console.log('  ราก       : ' + rec.publicSignals.merkleRoot.slice(0, 18) + '…');
+    console.log(C.dim('  โหนดตรวจ: node cli.js zk verify ' + file));
+    // snarkjs ฝาก worker ไว้ใน event loop — จบกระบวนการชัด ๆ
+    process.exit(0);
+  } else if (sub === 'verify') {
+    const file = rest[1] || '';
+    if (!file) { console.error(C.r('ใช้งาน: node cli.js zk verify <แฟ้มใบพิสูจน์.json>')); process.exit(1); }
+    if (!fs.existsSync(file)) { console.error(C.r('ไม่พบแฟ้ม ' + file)); process.exit(1); }
+    const rec = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!rec.zkProof || rec.authMode !== 'zk-snark-groth16') { console.error(C.r('แฟ้มไม่ใช่ใบพิสูจน์ ZK ของระบบนี้')); process.exit(1); }
+    // ลำดับ publicSignals ของ vkey: [nullifierHash, merkleRoot, epochNonce]
+    const signals = [
+      BigInt(rec.publicSignals.nullifierHash).toString(10),
+      BigInt(rec.publicSignals.merkleRoot).toString(10),
+      String(BigInt(rec.publicSignals.epochNonce)),
+    ];
+    const proof = { pi_a: rec.zkProof.pi_a, pi_b: rec.zkProof.pi_b, pi_c: rec.zkProof.pi_c };
+    const ok = await verifyMembership({ proof, publicSignals: { nullifierHash: signals[0], merkleRoot: signals[1], epochNonce: signals[2] } });
+    if (!ok) {
+      console.error(C.r('✗ ใบพิสูจน์ไม่ผ่าน (proof ไม่เที่ยงตามวงจร)'));
+      process.exit(1);
+    }
+    // กันการใช้สิทธิ์ซ้ำ — คลัง nullifier ฝั่งผู้ตรวจ
+    const ledger = loadNullifierLedger(NULLIFIER_LEDGER);
+    const nul = String(BigInt(rec.publicSignals.nullifierHash));
+    const epoch = String(BigInt(rec.publicSignals.epochNonce));
+    const root = String(BigInt(rec.publicSignals.merkleRoot));
+    if (isNullifierSpent(ledger, nul, Number(epoch), root)) {
+      console.error(C.r('✗ สิทธิ์รอบนี้ถูกใช้ไปแล้ว (nullifier ซ้ำ) — ปฏิเสธแม้ proof ยังถูกต้องตามวงจร'));
+      process.exit(1);
+    }
+    appendNullifier(NULLIFIER_LEDGER, { nullifier: nul, epoch: Number(epoch), root, verified_at: new Date().toISOString(), receiptId: rec.receiptId });
+    console.log(C.g('✓ ใบพิสูจน์ถูกต้อง (vkey ตรวจผ่าน · กุญแจเจ้าของไม่ถูกเปิดเผย)'));
+    console.log('  nullifier : ' + rec.publicSignals.nullifierHash.slice(0, 18) + '…  → บันทึกกันซ้ำแล้ว (' + ledger.length + ' รายการ)');
+    console.log(C.dim('  margin: ใบเดียวกันรอบเดียวกันใช้ซ้ำไม่ได้อีก — epoch ใหม่คือสิทธิ์ใหม่'));
+    process.exit(0); // snarkjs ฝาก worker ค้าง — ต้องจบชัด
+  } else {
+    console.log([
+      'คำสั่ง zk (ZK-SNARK Anonymous Membership):',
+      '  node cli.js zk enroll "ชื่อ"  ลงทะเบียนสมาชิก',
+      '  node cli.js zk list           ดูทะเบียนสมาชิก',
+      '  node cli.js zk tree           คำนวณรากสมาชิก',
+      '  node cli.js zk prove "ชื่อ"   พิสูจน์นิรนาม',
+      '  node cli.js zk verify <file>  ฝั่งโหนดตรวจ',
+      '',
+      '',
+      '  สิทธิ์ 1 คน / 1 รอบ (epoch) — nullifier กันการใช้ซ้ำ โดยไม่เผยว่าใคร',
+      '  ครั้งแรก: ต้องมีแฟ้มวงจรใน artifacts/ — วิธีสร้างอยู่ใน README หัวข้อ "การสร้างแฟ้มวงจร"',
+    ].join('\n'));
+  }
 }
