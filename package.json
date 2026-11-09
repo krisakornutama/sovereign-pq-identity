@@ -1,7 +1,7 @@
 {
   "name": "sovereign-pq-identity",
-  "version": "1.3.0",
-  "description": "Post-Quantum Identity for Sovereign OS — pseudonymous identity + dual-signed receipts (Ed25519 + ML-DSA-44, FIPS 204) + ZK-SNARK proofs: anonymous membership & balance threshold (Groth16). Offline-first, zero cloud.",
+  "version": "1.4.0",
+  "description": "Post-Quantum Identity for Sovereign OS — pseudonymous identity + dual-signed receipts (Ed25519 + ML-DSA-44, FIPS 204) + optional third layer SLH-DSA (FIPS 205) with key rotation + ZK-SNARK proofs: anonymous membership & balance threshold (Groth16). Offline-first, zero cloud.",
   "main": "cli.js",
   "type": "module",
   "scripts": {
@@ -13,12 +13,15 @@
   "keywords": [
     "post-quantum",
     "ml-dsa",
+    "slh-dsa",
     "ed25519",
     "zero-knowledge",
     "offline-first",
     "sovereign",
     "receipts",
-    "fips-204"
+    "key-rotation",
+    "fips-204",
+    "fips-205"
   ],
   "author": "Krisakorn Utama <krisakornutama@users.noreply.github.com>",
   "license": "MIT",
