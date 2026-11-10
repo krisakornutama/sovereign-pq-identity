@@ -1,11 +1,11 @@
 {
   "name": "sovereign-pq-identity",
-  "version": "1.5.0",
-  "description": "Post-Quantum Identity for Sovereign OS — pseudonymous identity + dual-signed receipts (Ed25519 + ML-DSA-44, FIPS 204) + optional third layer SLH-DSA (FIPS 205) with key rotation + ZK-SNARK proofs: anonymous membership & balance threshold (Groth16). Offline-first, zero cloud.",
+  "version": "1.6.0",
+  "description": "Post-Quantum Identity for Sovereign OS — pseudonymous identity + dual-signed receipts (Ed25519 + ML-DSA-44, FIPS 204) + optional third layer SLH-DSA (FIPS 205) with key rotation + ZK-SNARK proofs (anonymous membership & balance threshold, Groth16) + ML-KEM (FIPS 203) hybrid encryption envelopes for files between nodes. Offline-first, zero cloud.",
   "main": "cli.js",
   "type": "module",
   "scripts": {
-    "test": "node --test --test-force-exit test/pq-identity.test.js test/vault.test.js test/zk.test.js",
+    "test": "node --test --test-force-exit test/pq-identity.test.js test/vault.test.js test/zk.test.js test/kem.test.js",
     "selftest": "node cli.js selftest",
     "demo": "node cli.js demo",
     "ledger": "node cli.js ledger"
@@ -21,7 +21,10 @@
     "receipts",
     "key-rotation",
     "fips-204",
-    "fips-205"
+    "fips-205",
+    "fips-203",
+    "ml-kem",
+    "hybrid-encryption"
   ],
   "author": "Krisakorn Utama <krisakornutama@users.noreply.github.com>",
   "license": "MIT",

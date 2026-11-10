@@ -11,6 +11,7 @@ import { readPassphrase, passphraseFromEnv } from './src/password.js';
 import { canonical } from './src/util.js';
 import { loadPoseidon, buildTree, pathFor, newMemberSecret, MAX_MEMBERS, MERKLE_DEPTH, DEEP_DEPTH, capacityFromRootFile, depthFromRootFile } from './src/merkle.js';
 import { proveMembership, verifyMembership, anonReceipt, loadNullifierLedger, isNullifierSpent, appendNullifier, artifactsReady, artifactsReadyDeep, proveBalance, verifyBalance, balanceReceipt, artifactsReadyBalance, artifactsReadyBalanceDeep, CIRCUIT } from './src/zk.js';
+import { kemKeygen, kemPublicFile, sealBytes, openEnvelope, KEM_PROFILE } from './src/kem.js';
 import { randomBytes } from 'node:crypto';
 
 const IDENT = 'data/identity.json';
@@ -23,6 +24,8 @@ const BVAULT = 'data/balances.vault.json';       // คลังใบยอด 
 const ISSUED = 'data/issued_balances.json';      // ทะเบียนสาธารณะ: commitment ใบยอดล้วน (ไม่มียอด ไม่มีตัวตน)
 const BROOT = 'data/balances_root.json';         // รากต้นไม้ใบยอดที่ issuer ประกาศให้ผู้ตรวจ
 const ANCHORS = 'data/anchors.jsonl';            // สายสกุลกุญแจสาธารณะหลังหมุน (public ล้วน — แฟ้มนี้ไม่มีกุญแจลับ)
+const KVAULT = 'data/kem.vault.json';            // v1.6 (Q-01): กุญแจลับ ML-KEM (sk) เก็บ vault เข้ารหัสแยกชั้นของตัวเอง
+const KPUB = 'data/kem-pub.json';                // v1.6: กุญแจสาธารณะ ML-KEM — แจกได้ทุกทาง (public ล้วน)
 const C = { g: (s) => `\x1b[32m${s}\x1b[0m`, y: (s) => `\x1b[33m${s}\x1b[0m`, r: (s) => `\x1b[31m${s}\x1b[0m`, b: (s) => `\x1b[36m${s}\x1b[0m`, dim: (s) => `\x1b[2m${s}\x1b[0m` };
 
 const [cmd, ...rest] = process.argv.slice(2);
@@ -211,6 +214,8 @@ if (cmd === 'keygen') {
   }
 } else if (cmd === 'zk') {
   await zkNamespace(rest);
+} else if (cmd === 'kem') {
+  await kemNamespace(rest);
 } else if (cmd === 'selftest') {
   // ทุกเคสใช้ข้อมูลจำลองล้วน — ไม่แตะแฟ้ม + คลังจริง
   const id = createIdentity({ label: 'selftest' });
@@ -270,7 +275,15 @@ if (cmd === 'keygen') {
   node cli.js zk prove-bal "ชื่อ" <threshold> [epoch]  พิสูจน์ "ยอด ≥ threshold" → data/zk-balance-<epoch>.json (อ่านโปรไฟล์จากไฟล์ราก)
   node cli.js zk verify-bal <แฟ้ม.json>      ฝั่งโหนดตรวจยอด: vkey ตาม field circuit ในใบ + กัน nullifier ซ้ำ (exit 0 = ผ่าน)
 
-  สำหรับ automation (หลีกเลี่ยง prompt): กำหนด SOVEREIGN_MEMBER_PASS=... สำหรับ vault สมาชิก · SOVEREIGN_BALANCE_PASS=... สำหรับคลังใบยอด (แฟ้มแยก passphrase แยกกัน)`);
+  สำหรับ automation (หลีกเลี่ยง prompt): กำหนด SOVEREIGN_MEMBER_PASS=... สำหรับ vault สมาชิก · SOVEREIGN_BALANCE_PASS=... สำหรับคลังใบยอด (แฟ้มแยก passphrase แยกกัน)
+
+  ML-KEM (FIPS 203 — ซองเข้ารหัสไฟล์ระหว่างโหนด v1.6):
+  node cli.js kem keygen "ชื่อผู้รับ"          เกิดกุญแจ ML-KEM-768 (sk เข้า data/kem.vault.json · pk ลง data/kem-pub.json)
+  node cli.js kem pub                          อ่านแฟ้มกุญแจสาธารณะ (แจกได้ทุกทาง — public ล้วน)
+  node cli.js kem seal <ไฟล์> --to <kem-pub.json> [--out <แฟ้ม.ออก>]   ผนึกไฟล์ส่งเจ้าของกุญแจนั้น (ผู้ส่งไม่ต้องมีกุญแจลับ)
+  node cli.js kem open <ซอง.seal.json> [--out <path> --force]         เปิดซองด้วยกุญแจลับในเครื่อง (แก้ 1 บิต = ปฏิเสธ)
+
+  สำหรับ automation: กำหนด SOVEREIGN_KEM_PASS=... สำหรับ vault กุญแจ KEM (แยกชั้นจาก vault อื่น)`);
 }
 
 // ==== ZK-SNARK Anonymous Membership — ตัวจัดการคำสั่ง (เฟส 2) ====
@@ -635,6 +648,118 @@ async function zkNamespace(rest) {
       '',
       '  สิทธิ์ 1 คน / 1 ใบ / 1 รอบ (epoch) — nullifier กันการใช้ซ้ำ โดยไม่เผยว่าใคร และไม่เผยยอดจริง',
       '  ครั้งแรก: ต้องมีแฟ้มวงจรใน artifacts/ — วิธีสร้างอยู่ใน README หัวข้อ "การสร้างแฟ้มวงจร"',
+    ].join('\n'));
+  }
+}
+
+// ==== ML-KEM (FIPS 203) — ซองเข้ารหัสไฟล์ระหว่างโหนด (v1.6 · Q-01) ====
+// ผู้ส่งถือแต่กุญแจสาธารณะของผู้รับ (kem-pub.json) — เปิดได้เฉพาะเครื่องที่ถือกุญแจลับใน kem.vault.json
+async function kemNamespace(rest) {
+  const sub = rest[0] || 'help';
+
+  const askKemPassphrase = async (needCreate) => {
+    let passphrase = process.env.SOVEREIGN_KEM_PASS || '';
+    if (!passphrase) passphrase = await readPassphrase(needCreate ? '  ตั้ง passphrase กุญแจ KEM (ต่ำสุด 8 ตัว): ' : '  passphrase กุญแจ KEM: ');
+    if (needCreate && passphrase.length < 8) { console.error(C.r('  ✗ passphrase สั้นเกินไป (ต่ำสุด 8 ตัว)')); process.exit(1); }
+    return passphrase;
+  };
+
+  if (sub === 'keygen') {
+    const label = rest[1] || '';
+    if (!label) { console.error(C.r('ใช้งาน: node cli.js kem keygen "ชื่อผู้รับ"')); process.exit(1); }
+    if (fs.existsSync(KVAULT) && !rest.includes('--force')) {
+      console.error(C.r('มีกุญแจ KEM อยู่แล้วใน ' + KVAULT + ' — ซองที่ผนึกไว้ด้วยกุญแจเดิม จะเปิดไม่ได้อีกเมื่อ vault ถูกเขียนทับ'));
+      console.error(C.r('  ถ้าต้องการเกิดใหม่จริง: ต่อท้ายคำสั่งด้วยธง --force (กุญแจเก่าไม่มีทางกลับมา — vault เขียนทับ)'));
+      process.exit(1);
+    }
+    const t0 = performance.now();
+    const { pk_b64, sk_b64, pk_sha256 } = kemKeygen();
+    const ms = (performance.now() - t0).toFixed(1);
+    const passphrase = await askKemPassphrase(true);
+    fs.mkdirSync('data', { recursive: true });
+    fs.writeFileSync(KVAULT, JSON.stringify(createVault({ profile: KEM_PROFILE, label, sk_b64 }, passphrase), null, 2));
+    openVault(JSON.parse(fs.readFileSync(KVAULT, 'utf8')), passphrase); // ตรวจว่า vault เปิดกลับได้จริงก่อนอวยวัด
+    const pubFile = kemPublicFile({ label, pk_b64 });
+    fs.writeFileSync(KPUB, JSON.stringify(pubFile, null, 2));
+    console.log(C.g(`✓ เกิดกุญแจ KEM (ML-KEM-768 · FIPS 203) สำหรับ "${label}" สำเร็จ (${ms} ms)`));
+    console.log('  กุญแจลับ   : → ' + C.b(KVAULT) + C.dim('  (vault เข้ารหัส Argon2id + AES-256-GCM — sk 2400 ไบต์)'));
+    console.log('  กุญแจสาธารณะ: → ' + C.b(KPUB) + '  (pk 1184 ไบต์ · แจกต่อได้ทุกทาง)');
+    console.log('  pk sha256  : ' + C.b(pk_sha256.slice(0, 24) + '…'));
+    console.log(C.y('  ✍ ต่อไป: ส่งแฟ้ม ' + KPUB + ' ให้คู่เทรดที่จะส่งแฟ้มมาให้เรา — เขาใช้คำสั่ง: node cli.js kem seal <ไฟล์> --to kem-pub.json'));
+  } else if (sub === 'pub') {
+    if (!fs.existsSync(KPUB)) { console.error(C.r('ยังไม่มี ' + KPUB + ' — รัน: node cli.js kem keygen ก่อน')); process.exit(1); }
+    const pub = JSON.parse(fs.readFileSync(KPUB, 'utf8'));
+    if (pub.profile !== KEM_PROFILE) { console.error(C.r('แฟ้มกุญแจสาธารณะไม่ใช่ของระบบนี้')); process.exit(1); }
+    console.log(C.g('กุญแจสาธารณะ ML-KEM-768 (แจกได้ทุกทาง — public ล้วน):'));
+    console.log('  ผู้รับ    : ' + C.b(pub.label));
+    console.log('  ขนาด pk  : ' + Buffer.from(pub.public_key_b64, 'base64').length + ' ไบต์ (ตามมาตรฐาน FIPS 203 ML-KEM-768)');
+    console.log('  pk sha256 : ' + C.b(pub.public_key_sha256.slice(0, 24) + '…'));
+    console.log(C.dim('  คู่เทรดใช้แฟ้มนี้ในคำสั่ง: node cli.js kem seal <ไฟล์> --to ' + KPUB));
+  } else if (sub === 'seal') {
+    const fileArg = rest[1] || '';
+    if (!fileArg) { console.error(C.r('ใช้งาน: node cli.js kem seal <ไฟล์> --to <kem-pub.json> [--out <แฟ้ม.ออก>]')); process.exit(1); }
+    const toIdx = rest.indexOf('--to');
+    const pubPath = toIdx > 0 ? rest[toIdx + 1] : KPUB;
+    if (!fs.existsSync(fileArg)) { console.error(C.r('ไม่พบแฟ้ม ' + fileArg)); process.exit(1); }
+    if (!fs.existsSync(pubPath)) { console.error(C.r('ไม่พบแฟ้มกุญแจสาธารณะ ' + pubPath + ' — ขอแฟ้มนี้จากผู้รับ (เกิดจาก kem keygen)')); process.exit(1); }
+    const pub = JSON.parse(fs.readFileSync(pubPath, 'utf8'));
+    const plain = fs.readFileSync(fileArg);
+    const seal = sealBytes(new Uint8Array(plain), pub);
+    let out = rest.indexOf('--out') > 0 ? rest[rest.indexOf('--out') + 1] : (fileArg + '.seal.json');
+    fs.writeFileSync(out, JSON.stringify(seal, null, 2));
+    console.log(C.g(`✓ ผนึกแฟ้มสำเร็จ → ${out}`));
+    console.log('  ผู้รับ   : ' + C.b(seal.recipient.label) + '  (pk sha256 ' + seal.recipient.public_key_sha256.slice(0, 16) + '…)');
+    console.log('  เนื้อหา  : ' + seal.plaintext_length + ' ไบต์ → ' + (Buffer.byteLength(JSON.stringify(seal))) + ' ไบต์ซอง');
+    console.log(C.dim('  ผู้ส่งไม่จำเป็นต้องถือกุญแจลับเลย — เปิดได้เฉพาะเจ้าของกุญแจ: node cli.js kem open ' + out));
+  } else if (sub === 'open') {
+    const sealPath = rest[1] || '';
+    if (!sealPath) { console.error(C.r('ใช้งาน: node cli.js kem open <ซอง.seal.json> [--out <path> --force]')); process.exit(1); }
+    if (!fs.existsSync(sealPath)) { console.error(C.r('ไม่พบซอง ' + sealPath)); process.exit(1); }
+    const seal = JSON.parse(fs.readFileSync(sealPath, 'utf8'));
+    let passphrase = process.env.SOVEREIGN_KEM_PASS || '';
+    if (!passphrase) passphrase = await readPassphrase('  passphrase กุญแจ KEM: ');
+    let kemVault;
+    try {
+      kemVault = openVault(JSON.parse(fs.readFileSync(KVAULT, 'utf8')), passphrase);
+      if (kemVault.profile !== KEM_PROFILE || !kemVault.sk_b64) throw new Error('vault กุญแจ KEM ไม่ใช่ของระบบนี้');
+    } catch (e) {
+      console.error(C.r('  ✗ ' + e.message));
+      process.exit(1);
+    }
+    const t0 = performance.now();
+    let plain;
+    try {
+      plain = openEnvelope(seal, kemVault.sk_b64);
+    } catch (e) {
+      console.error(C.r('✗ ' + e.message));
+      process.exit(1);
+    }
+    const ms = (performance.now() - t0).toFixed(1);
+    const defaultOut = sealPath.endsWith('.seal.json') ? sealPath.slice(0, -'.seal.json'.length) : sealPath.replace(/\.json$/, '') + '.opened';
+    const out = rest.indexOf('--out') > 0 ? rest[rest.indexOf('--out') + 1] : defaultOut;
+    const force = rest.includes('--force');
+    if (fs.existsSync(out) && out !== defaultOut && !force) {
+      console.error(C.r('แฟ้ม ' + out + ' มีอยู่แล้ว — ถ้ายอมเขียนทับจริง รันซ้ำพร้อมธง --force'));
+      process.exit(1);
+    }
+    if (fs.existsSync(out) && out === defaultOut) {
+      console.log(C.y('  ⚠ แฟ้มปลายทางอยู่แล้ว (' + out + ') — เขียนทับด้วยเนื้อหาจากซอง'));
+    }
+    fs.writeFileSync(out, plain);
+    console.log(C.g(`✓ เปิดซองสำเร็จ (${ms} ms) → ${out}`));
+    console.log('  ผู้รับตามซอง: ' + C.b(seal.recipient.label) + '  ·  ขนาดเนื้อหา: ' + plain.length + ' ไบต์');
+    console.log('  alg        : ' + C.b(seal.alg));
+    console.log(C.dim('  การตรวจถ้าไบต์ใดในซองถูกแก้แม้ 1 ตำแหน่ง: ปฏิเสธทันที (GCM authTag ไม่ตรง)'));
+  } else {
+    console.log([
+      'คำสั่ง kem (ML-KEM-768 · FIPS 203 — ซองเข้ารหัสไฟล์ระหว่างโหนด v1.6):',
+      '  node cli.js kem keygen "ชื่อผู้รับ"   เกิดกุญแจ KEM (sk → vault เข้ารหัส · pk → data/kem-pub.json)',
+      '  node cli.js kem pub                   อ่านแฟ้มกุญแจสาธารณะ (แจกต่อได้)',
+      '  node cli.js kem seal <ไฟล์> --to <kem-pub.json>   ผนึกไฟล์ส่งเจ้าของกุญแจ (ciphertext + encapsulation ตาม FIPS 203)',
+      '  node cli.js kem open <ซอง.seal.json>  เปิดซองด้วยกุญแจลับในเครื่อง (ซองถูกแก้ 1 บิต = ปฏิเสธ)',
+      '',
+      '  หลัก: ผู้ส่งถือมีแต่กุญแจสาธารณะของผู้รับ — ผู้รับเปิดได้เฉพาะกุญแจลับของตัวเองเท่านั้น',
+      '  automation: กำหนด SOVEREIGN_KEM_PASS=... (vault กุญแจ KEM แยกชั้นจาก vault อื่น)',
     ].join('\n'));
   }
 }

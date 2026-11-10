@@ -7,9 +7,10 @@
 
 [![Standard](https://img.shields.io/badge/Standard-FIPS_204_ML--DSA-fbbf24?style=for-the-badge&labelColor=030712)](https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.204.pdf)
 [![Standard](https://img.shields.io/badge/Standard-FIPS_205_SLH--DSA-fbbf24?style=for-the-badge&labelColor=030712)](https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.205.pdf)
+[![Standard](https://img.shields.io/badge/Standard-FIPS_203_ML--KEM-fbbf24?style=for-the-badge&labelColor=030712)](https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.203.pdf)
 [![Zero Cloud](https://img.shields.io/badge/Cloud-ZERO-34d399?style=for-the-badge&labelColor=030712)](.)
 [![ZK-SNARK](https://img.shields.io/badge/ZK--SNARK-Groth16_BN254-a855f7?style=for-the-badge&labelColor=030712)](#-️-zk-snark-anonymous-proof-v12--พิสูจน์ว่าเป็นสมาชิกโดยไม่บอกว่าใคร)
-[![Tests](https://img.shields.io/badge/Tests-40_passing-22d3ee?style=for-the-badge&labelColor=030712)](#-ผลการทดสอบจากเครื่องจริง)
+[![Tests](https://img.shields.io/badge/Tests-46_passing-22d3ee?style=for-the-badge&labelColor=030712)](#-ผลการทดสอบจากเครื่องจริง)
 [![Node](https://img.shields.io/badge/Node.js-%E2%89%A520-43853d?style=for-the-badge&labelColor=030712)](./package.json)
 
 </div>
@@ -32,7 +33,7 @@ node cli.js keygen "ชื่อเรียกเครื่อง"   # สร
 node cli.js keygen --slh "ชื่อ"        # แบบสามชั้น: เพิ่มลายเซ็น SLH-DSA-128s (FIPS 205) ตั้งแต่เกิดตัวตน
 node cli.js demo        # จำลองขาย → ถอดกุญแจจาก vault → เซ็นตามโปรไฟล์ → ตรวจ → ลงคลัง
 node cli.js selftest    # ทดสอบการบุกรุก 7 เคส (สลิป + vault)
-npm test                # ชุดทดสอบเต็ม 40 เคส (ไม่ใช้เน็ต)
+npm test                # ชุดทดสอบเต็ม 46 เคส (ไม่ใช้เน็ต)
 
 # หมุนเวียนกุญแจ (v1.4) — ตัวตนใหม่แทนชุดเดิม แล้วใบเสร็จเก่ายังตรวจผ่านทุกใบ
 node cli.js rotate --slh           # หมุนครั้งเดียว + อัปเกรดเป็นสามชั้นพร้อมกัน (dual → triple)
@@ -58,6 +59,11 @@ node cli.js zk verify data/zk-receipt-<epoch>.json   # เลือก vkey จ�
 node cli.js zk balance-tree --deep           # รากใบยอดโปรไฟล์ลึก D=5
 node cli.js zk prove-bal "ชื่อ" 10000000     # พิสูจน์ยอดโปรไฟล์ลึก (อ่านโปรไฟล์จากไฟล์ราก)
 node cli.js zk verify-bal data/zk-balance-<epoch>.json # เลือก vkey จาก field `circuit` ในใบเอง (balance_v1 / balance_d5_v1)
+
+# ML-KEM (v1.6) — ผนึกแฟ้มเป็นกล่องลงชื่อผู้รับเดียว (แฟ้มส่งระหว่างโหนด)
+node cli.js kem keygen "โรงเรือนหลัก"        # เกิดกุญแจ ML-KEM-768 (sk เข้า vault เข้ารหัส · pk ลง data/kem-pub.json)
+node cli.js kem seal report.json --to data/kem-pub.json   # ผู้ส่งใช้แต่กุญแจสาธารณะ — แฟ้มไปไหนก็ปลอดภัย
+node cli.js kem open report.json.seal.json   # ปลายทางถือกุญแจลับในเครื่องเดียวที่ถือง (แก้ซอง 1 บิต = ปฏิเสธ)
 ```
 
 **เอาต์พุตจริงตอนรัน `node cli.js demo` (คัดจากเครื่องที่สร้างระบบนี้เอง):**
@@ -582,12 +588,87 @@ node cli.js zk verify-bal receipt.json   # เลือก vkey จาก field 
 
 ---
 
-## ✅ ผลการทดสอบจากเครื่องจริง
+## 🧬 ML-KEM (FIPS 203) — ผนึกแฟ้มส่งระหว่างโหนด (v1.6)
+
+รุ่น v1.6 เพิ่มชั้น**ซองเข้ารหัสไฮบริด**อีกตระกูล: **ML-KEM-768 (KEM ตามมาตรฐาน FIPS 203)** + **AES-256-GCM** — ใช้เมื่อต้อง**ส่งแฟ้มให้เครื่องอื่น** (รายงานยอดแฟร์ · สลิปกองทุนระหว่างโหนด) แต่ไม่อยากให้กลางทางเปิดอ่านได้เด็ดขาด
+
+**หลักทำงาน (เพราะเป็น KEM ไม่ใช่ PKE):**
+- ผู้รับเกิดคู่กุญแจ ML-KEM-768 หนึ่งครั้ง (`kem keygen`) — กุญแจลับ 2400 B เข้า vault เข้ารหัส Argon2id + AES-256-GCM ของตัวเอง (แฟ้มแยก: `data/kem.vault.json` · passphrase อีกชั้นแยกจาก vault อื่น)
+- ผู้ส่งถือแต่**กุญแจสาธารณะ** (`data/kem-pub.json` — แจกได้ทุกทาง): ระบบคลุมกุญแจ (encapsulate) ได้กุญแจ session + ไบต์ encapsulation ตามมาตรฐานจริง แล้วเข้ารหัสแฟ้มด้วย AES-256-GCM (กุญแจ session = SHA-256("sovereign-kem/v1" ‖ sharedSecret) — ผูกโดเมนใช้งาน)
+- เปิดได้ที่เดียว: เครื่องที่ถือกุญแจลับ — ถอด sharedSecret → GCM ตรวจ authTag ครบถึงเนื้อหา; ซองถูกแก้แม้ 1 ตำแหน่ง = ปฏิเสธ
+
+### ⚙️ CLI ตอนจริง (คัดจากเครื่องทดสอบ)
+
+```none
+$ node cli.js kem keygen "โรงเรือนหลัก"
+✓ เกิดกุญแจ KEM (ML-KEM-768 · FIPS 203) สำหรับ "โรงเรือนหลัก" สำเร็จ (13.4 ms)
+  กุญแจลับ   : → data/kem.vault.json  (vault เข้ารหัส Argon2id + AES-256-GCM — sk 2400 ไบต์)
+  กุญแจสาธารณะ: → data/kem-pub.json  (pk 1184 ไบต์ · แจกต่อได้ทุกทาง)
+  pk sha256  : 16d492ca294f30556d24b4de…
+
+$ node cli.js kem seal report.json --to data/kem-pub.json
+✓ ผนึกแฟ้มสำเร็จ → report.json.seal.json
+  ผู้รับ   : โรงเรือนหลัก  (pk sha256 16d492ca294f3055…)
+  เนื้อหา  : 95 ไบต์ → 1995 ไบต์ซอง
+
+$ rm report.json && node cli.js kem open report.json.seal.json
+✓ เปิดซองสำเร็จ (15.7 ms) → report.json
+  ผู้รับตามซอง: โรงเรือนหลัก  ·  ขนาดเนื้อหา: 95 ไบต์
+  alg        : sovereign.ml-kem768+aesgcm.v1
+
+$ node cli.js kem open tampered.seal.json   # แก้ ciphertext 1 ตำแหน่งกลางทาง
+✗ เปิดซองไม่ได้ — ซองไม่ผูกกับกุญแจนี้ หรือเนื้อหาถูกแก้ (GCM authTag ไม่ตรง)   (exit 1)
+```
+
+**โครงซอง (`*.seal.json`) — จริงจากสนามระบบ:**
+
+```json
+{
+  "version": 1,
+  "alg": "sovereign.ml-kem768+aesgcm.v1",
+  "profile": "sovereign.kem768.v1",
+  "recipient": { "label": "โรงเรือนหลัก", "public_key_sha256": "16d492ca294f30556d24b4def4f3f2fe552bb711b9c1d4a29b544583ea665a2a" },
+  "encapsulated_cipher_b64": "…(1088 ไบต์ FIPS 203)",
+  "nonce_b64": "heSZIxaz/weE4MMc",
+  "auth_tag_b64": "ehUJ0sB96PZ4aRFsyjPPzg==",
+  "ciphertext_b64": "…(ขนาดราว 1.33 × เนื้อหาจริง)",
+  "plaintext_length": 95
+}
+```
+
+### ⚡ ประสิทธิภาพวัดจริง (Node.js 24 · JS ล้วน — ค่ากลางจาก 25 รอบ + ไฟล์ 1 MiB วัดจริง)
+
+| ขั้น | เวลา | ขนาด |
+|---|---|---|
+| เกิดกุญแจ (keygen) | ~2 ms | pk 1184 B · sk 2400 B (FIPS 203 Table 3) |
+| ผนึกไฟล์ 1 KiB (encapsulate + AES) | ~1.8 ms | ซอง 3,206 B (ส่วนหัวตายตัว ~1.8 KB เก็บกุญแจ encapsulation + GCM ครบ) |
+| เปิดซอง 1 KiB (decapsulate + AES) | ~1.4 ms | — |
+| ผนึกไฟล์ 1 MiB | ~5.3 ms | ซอง ~1.4 MB (×1.33 base64 + ส่วนหัวตายตัว) |
+| เปิดซอง 1 MiB | ~5.1 ms | — |
+
+### 🎯 ข้อจำกัดของ v1.6 (ตามความจริง)
+
+- 📦 **ซองเหมาะแฟ้มเดียว–ผู้รับเดียวต่อรอบ** — ส่งถึงหลายคนต้องผนึกซองต่างกัน (KEM หนึ่งรอบผูกได้ผู้รับเดียวตามมาตรฐาน)
+- 🧠 **อ่านแฟ้มทั้งก้อนเข้าหน่วยความจำ** — เหมาะแฟ้มธุรกิจทั่วไป; ถึงจุดสตรีมมิงไฟล์ใหญ่มาก ให้ต่อยอดชั้นเป็น chunk (คิวใน PLAN.md)
+- 🏷️ **ชื่อผู้รับ (`label`) ในซองเป็นข้อความอ้างอิงล้วน** — การผูกจริงคือ `public_key_sha256` (ตรงไหนสลับปลายทาง hash จับได้เป๊ะ ไม่พิงชื่อ)
+- 🔑 **vault กุญแจ KEM แยก passphrase อีกชั้น** (`SOVEREIGN_KEM_PASS`) — โจมตีไขผ่านจากช่องอื่นมาถึงกุญแจนี้ไม่ได้เสมอ; หลาย vault หลาย passphrase คือหลังชั้นค่าใช้ง่ายต่อฝั่งเครื่องเอง
+
+### 🏠 ปลายทางใช้จริง
+
+แฟ้มซองนี้เก็บ/ส่งผ่านทางใดก็ได้ (อีเมล · แชร์แฟ้ม · คลาวด์ทั่วไป) — ใครก็ถือได้ แต่เปิดอ่านได้เฉพาะเจ้าของกุญแจลับเท่านั้น; ระบบหลัก [sovereign-origin](https://github.com/krisakornutama/sovereign-origin) นำชุดนี้ไปใช้เป็นทางส่งข้อมูลระหว่างเครื่องได้โดยตรง (แผนต่อยอดอยู่ใน [PLAN.md](PLAN.md) รายการ Q-01–Q-02)
+
+---
 
 ## ✅ ผลการทดสอบจากเครื่องจริง
 
 ```
 $ npm test
+✔ kem: keygen ได้ขนาดตามมาตรฐาน FIPS 203 (pk 1184 B · sk 2400 B) และ pk จาก sk ตรงตัว
+✔ kem: ผนึก → เปิด กลับได้ไบต์ตรงเดิม (ไบนารี + ยูนิโคด) และเนื้อหาไม่หลุดในซอง
+✔ kem: แก้ 1 ตำแหน่งในซอง (ciphertext / nonce / authTag) → open ปฏิเสธทันที
+✔ kem: ซองของผู้รับรายอื่น → เปิดด้วยกุญแจลับไม่ตรง → ปฏิเสธ (และกุญแจผิดรูปปฏิเสธก่อนถอด)
+✔ kem: ซองถูกแก้โครง (alg/version) หรือรายชื่อผู้รับถูกเแทน → ปฏิเสธก่อนถอด
+✔ kem: vault กุญแจ KEM รอบจริง (createVault → openVault) — passphrase ผิดปฏิเสธและ sk ไม่เขียนลงดิสก์แบบ plaintext
 ✔ canonical เรียงคีย์ได้เสถียร (bytes เดียวทุกเครื่อง)
 ✔ ยืนยันตัวตน Ed25519 + ML-DSA-44 ทั้งคู่
 ✔ เซ็นใบเสร็จ → ตรวจผ่านทั้งสองลายเซ็น
@@ -629,7 +710,7 @@ $ npm test
 ✔ zk cross-circuit: ใบพิสูจน์ membership ตรวจด้วย vkey balance → ต้องปฏิเสธ
 ✔ zk cross-circuit: ใบพิสูจน์ balance ตรวจด้วย vkey membership → ต้องปฏิเสธ (error หรือ false)
 
-ℹ tests 40 · pass 40 · fail 0 · duration ~132 s — กินเวลาราว 2 นาทีเพราะเทสเซ็นชั้น SLH-DSA จริง (~22 วิ/ลายเซ็น) ตามข้อจำกัดที่ประกาศไว้
+ℹ tests 46 · pass 46 · fail 0 · duration ~132 s — กินเวลาราว 2 นาทีเพราะเทสเซ็นชั้น SLH-DSA จริง (~22 วิ/ลายเซ็น) ตามข้อจำกัดที่ประกาศไว้
 ```
 
 ```
@@ -667,7 +748,7 @@ repo นี้คือ**ชั้นตรวจสอบอัตลักษ�
 | ✅ **v1.3 — บังเกตุจากเครื่องจริง** | **ZK-SNARK Balance Threshold** — วงจรที่ 2 `balance.circom` (LessEqThan 64 บิต · ยอด/กุญแจลับทั้งชุด ไม่เปิดยอดจริง) · CLI `zk issue/issue-list/balance-tree/prove-bal/verify-bal` · 26/26 ทดสอบ | พร้อมใช้ |
 | ✅ **v1.4 — บังเกตุจากเครื่องจริง** | **SLH-DSA (FIPS 205) ชั้นที่สาม + หมุนเวียนกุญแจ** — โปรไฟล์ `--slh` เลือกใช้ · `rotate` + สายสกุลกุญแจสาธารณะ (`anchors.jsonl`) · เกตอัตโนมัติ `--if-due` · ใบเก่า back-compat 100% · 33/33 ทดสอบ | พร้อมใช้ |
 | ✅ **v1.5 — บังเกตุจากเครื่องจริง** | **โปรไฟล์ลึก D=5 (32 ช่อง) + พิธีหลายฝ่าย** — `membership_d5.circom` / `balance_d5.circom` · `scripts/ceremony.mjs` (chain: setup → contribute×2 → verify ZKey Ok! → export vkey) · CLI ธง `--deep` ครบทุกคำสั่ง tree/prove/verify/balance-tree/prove-bal/verify-bal · verify เลือก vkey จาก field `circuit` ในใบ · cross-vkey/cross-circuit rejection · `artifacts/ceremony.json` manifest · 40/40 ทดสอบ | พร้อมใช้ |
-| 🔊 **v1.6 (เฟส 4)** | **ML-KEM (FIPS 203) — หน้ารหัสไฮบริดสำหรับแฟ้มระหว่างโหนด** — `src/kem.js` + `kem keygen/pub` + `seal <file> --to <pub>` + `open <seal.json>` (ML-KEM-768 + AES-256-GCM) · vault แยก `data/kem.vault.json` · 4 เคสทดสอบ (roundtrip, tamper, wrong key, envelope integrity) | วางแผน |
+| ✅ **v1.6 — บังเกตุจากเครื่องจริง** | **ML-KEM (FIPS 203) — ซองเข้ารหัสแฟ้มระหว่างโหนด** — `src/kem.js` (ML-KEM-768 + AES-256-GCM · กุญแจ session = SHA-256("sovereign-kem/v1" ‖ sharedSecret)) · CLI `kem keygen/pub/seal/open` · vault แยก `data/kem.vault.json` (env `SOVEREIGN_KEM_PASS`) · ผูกผู้รับด้วย `public_key_sha256` (ไม่ขน pk ในซอง) · ซองถูกแก้ 1 ตำแหน่ง = ปฏิเสธ · 6/6 ทดสอบ · ซอง 1 KiB → 3,206 B (ส่วนหัวตายตัว 1,835 B) · seal/open 1 KiB ~1.8/1.4 ms | พร้อมใช้ |
 | 🧩 **เฟสถัดไป** | Falcon (FIPS 206 / FN-DSA) เมื่อ finalize — คงพับตามนโยบาย "หยิบที่จบมาใช้ก่อน" (NIST ยืนยัน 27 ต.ค. 2026: FIPS 206 ยังเป็น "selected for ongoing standardization") | วางแผน |
 
 ---
