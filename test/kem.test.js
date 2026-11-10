@@ -2,7 +2,7 @@
 // หลักเดียวกับทั้ง repo: ไม่มีจำลอง — ใช้ ML-KEM-768 จริงจาก @noble/post-quantum + AES-256-GCM จริง
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { kemKeygen, kemPublicFile, sealBytes, openEnvelope, KEM_ALG, KEM_PROFILE } from '../src/kem.js';
+import { kemKeygen, kemPublicFile, sealBytes, openEnvelope, envelopePublicInfo, pubSha256, KEM_ALG, KEM_PROFILE } from '../src/kem.js';
 import { createVault, openVault, VAULT_PARAMS_TEST } from '../src/vault.js';
 
 // เสียบลายเซ็นมือแบบเดียวกับ test/zk: แก้ 1 ตำแหน่งใน base64 string (ยังเป็น base64 ที่พอใช้ได้)
@@ -80,7 +80,7 @@ test('kem: ซองของผู้รับรายอื่น → เป�
   mustThrow(() => openEnvelope(seal, recipient.sk_b64.slice(0, 1216)), 'กุญแจลับผิดขนาด');
 });
 
-test('kem: ซองถูกแก้โครง (alg/version) หรือรายชื่อผู้รับถูกเแทน → ปฏิเสธก่อนถอด', () => {
+test('kem: ซองถูกแก้โครง (alg/version) หรือรายชื่อผู้รับถูกแทนที่ → ปฏิเสธก่อนถอด', () => {
   const { sk_b64 } = kemKeygen();
   const pub = kemPublicFile({ label: 'ผู้รับ', pk_b64: kemKeygen().pk_b64 });
   const seal = sealBytes(Buffer.from('ok', 'utf8'), pub);
@@ -103,4 +103,33 @@ test('kem: vault กุญแจ KEM รอบจริง (createVault → open
   assert.equal(out.toString('utf8'), 'ok');
   // passphrase ผิด → ปฏิเสธ (ไม่เงียบเฉย)
   mustThrow(() => openVault(vaultJson, 'ผิดรหัส-ก็-ใช่'), 'passphrase vault ผิด');
+});
+
+test('kem: หน้าเส้นทางซองจาก metadata ล้วน (kem check) — ไม่แตะกุญแจ/ไม่แตะเนื้อหา · โครงผิดทุกระดับจับได้', () => {
+  const { pk_b64, pk_sha256 } = kemKeygen();
+  const pub = kemPublicFile({ label: 'ผู้จัดการกองทุน', pk_b64 });
+  const payload = Buffer.from('~ สายส่งลับ ~', 'utf8');
+  const seal = sealBytes(payload, pub);
+  const info = envelopePublicInfo(seal);
+  assert.equal(info.alg, KEM_ALG);
+  assert.equal(info.version, 1);
+  assert.equal(info.recipient_sha256, pk_sha256);
+  assert.equal(info.recipient_label, 'ผู้จัดการกองทุน');
+  assert.equal(info.encapsulated_cipher_bytes, 1088); // รูปมาตรฐาน FIPS 203
+  assert.equal(info.plaintext_length, payload.length);
+  assert.deepEqual(info.anomalies, []);
+  // metadata สำหรับเส้นทางต้องไม่มี field ที่แบกไบต์เนื้อหา/กุญแจเด็ดขาด (field ขนาดอย่าง encapsulated_cipher_bytes อนุญาต — เป็นตัวเลข)
+  assert.ok(!Object.keys(info).some((k) => /ciphertext|nonce|auth|_b64|_hex|^sk|sk_/.test(k)));
+  // โครงผิดแบบ route ไม่ได้ → ปฏิเสธทันที (alg/version/ผู้รับหาย)
+  assert.throws(() => envelopePublicInfo({ ...seal, alg: 'other.v1' }), /อัลกอริทึม/);
+  assert.throws(() => envelopePublicInfo({ ...seal, version: 2 }), /version ของซองไม่รองรับ/);
+  assert.throws(() => envelopePublicInfo({ ...seal, recipient: { label: 'x' } }), /ระบุปลายทางผู้รับ/);
+  // โครงเพี้ยนแบบอ่านเส้นทางได้ต่อ (ไม่พังขาดมือ): ขนาด encapsulation ไม่ตามมาตรฐาน → ต้องโผล่ใน anomalies
+  const odd = envelopePublicInfo({ ...seal, encapsulated_cipher_b64: 'QQ==' });
+  assert.ok(odd.anomalies.some((a) => a.includes('encapsulated_cipher')));
+  // pubSha256 วัดตรงจาก b64 เสมอ — แทนกุญแจในแฟ้ม pub โดยคง field sha เดิม → ค่าที่คำนวณใหม่ไม่ตรงแน่นอน
+  assert.equal(pubSha256(pub), pk_sha256);
+  const other = kemKeygen();
+  assert.notEqual(pubSha256({ profile: KEM_PROFILE, public_key_b64: other.pk_b64 }), pk_sha256);
+  assert.throws(() => pubSha256({ ...pub, profile: 'sovereign.kem512.v1' }), /ไม่ใช่ของระบบนี้/);
 });

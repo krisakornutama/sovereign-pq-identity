@@ -10,7 +10,7 @@
 [![Standard](https://img.shields.io/badge/Standard-FIPS_203_ML--KEM-fbbf24?style=for-the-badge&labelColor=030712)](https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.203.pdf)
 [![Zero Cloud](https://img.shields.io/badge/Cloud-ZERO-34d399?style=for-the-badge&labelColor=030712)](.)
 [![ZK-SNARK](https://img.shields.io/badge/ZK--SNARK-Groth16_BN254-a855f7?style=for-the-badge&labelColor=030712)](#-️-zk-snark-anonymous-proof-v12--พิสูจน์ว่าเป็นสมาชิกโดยไม่บอกว่าใคร)
-[![Tests](https://img.shields.io/badge/Tests-46_passing-22d3ee?style=for-the-badge&labelColor=030712)](#-ผลการทดสอบจากเครื่องจริง)
+[![Tests](https://img.shields.io/badge/Tests-48_passing-22d3ee?style=for-the-badge&labelColor=030712)](#-ผลการทดสอบจากเครื่องจริง)
 [![Node](https://img.shields.io/badge/Node.js-%E2%89%A520-43853d?style=for-the-badge&labelColor=030712)](./package.json)
 
 </div>
@@ -33,7 +33,7 @@ node cli.js keygen "ชื่อเรียกเครื่อง"   # สร
 node cli.js keygen --slh "ชื่อ"        # แบบสามชั้น: เพิ่มลายเซ็น SLH-DSA-128s (FIPS 205) ตั้งแต่เกิดตัวตน
 node cli.js demo        # จำลองขาย → ถอดกุญแจจาก vault → เซ็นตามโปรไฟล์ → ตรวจ → ลงคลัง
 node cli.js selftest    # ทดสอบการบุกรุก 7 เคส (สลิป + vault)
-npm test                # ชุดทดสอบเต็ม 46 เคส (ไม่ใช้เน็ต)
+npm test                # ชุดทดสอบเต็ม 48 เคส (ไม่ใช้เน็ต)
 
 # หมุนเวียนกุญแจ (v1.4) — ตัวตนใหม่แทนชุดเดิม แล้วใบเสร็จเก่ายังตรวจผ่านทุกใบ
 node cli.js rotate --slh           # หมุนครั้งเดียว + อัปเกรดเป็นสามชั้นพร้อมกัน (dual → triple)
@@ -63,7 +63,12 @@ node cli.js zk verify-bal data/zk-balance-<epoch>.json # เลือก vkey �
 # ML-KEM (v1.6) — ผนึกแฟ้มเป็นกล่องลงชื่อผู้รับเดียว (แฟ้มส่งระหว่างโหนด)
 node cli.js kem keygen "โรงเรือนหลัก"        # เกิดกุญแจ ML-KEM-768 (sk เข้า vault เข้ารหัส · pk ลง data/kem-pub.json)
 node cli.js kem seal report.json --to data/kem-pub.json   # ผู้ส่งใช้แต่กุญแจสาธารณะ — แฟ้มไปไหนก็ปลอดภัย
-node cli.js kem open report.json.seal.json   # ปลายทางถือกุญแจลับในเครื่องเดียวที่ถือง (แก้ซอง 1 บิต = ปฏิเสธ)
+node cli.js kem open report.json.seal.json   # ปลายทางถือกุญแจลับในเครื่องเดียวที่ถือกุญแจนั้น (แก้ซอง 1 บิต = ปฏิเสธ)
+
+# สายส่งมาตรฐาน (v1.7) — พิสูจน์แล้วผนึกในคำสั่งเดียว + โหนดขนส่งตรวจเส้นทางได้โดยไม่ต้องมีกุญแจ
+node cli.js zk prove-bal "ชื่อ" 250000 --seal-to data/kem-pub.json   # พิสูจน์ยอดเสร็จ → ผนึกต่อทันที (ธงเดียวจบ)
+node cli.js kem check report.json.seal.json             # metadata ล้วน: อัลกอริทึม/ผู้รับ/ขนาด — โหนดขนส่งใช้ได้
+node cli.js kem check report.json.seal.json --match data/kem-pub.json   # โหนดปลายทางยืนยัน "ซองถึงฉันแหล่งที่ถูก"
 ```
 
 **เอาต์พุตจริงตอนรัน `node cli.js demo` (คัดจากเครื่องที่สร้างระบบนี้เอง):**
@@ -657,6 +662,58 @@ $ node cli.js kem open tampered.seal.json   # แก้ ciphertext 1 ตำแ�
 
 แฟ้มซองนี้เก็บ/ส่งผ่านทางใดก็ได้ (อีเมล · แชร์แฟ้ม · คลาวด์ทั่วไป) — ใครก็ถือได้ แต่เปิดอ่านได้เฉพาะเจ้าของกุญแจลับเท่านั้น; ระบบหลัก [sovereign-origin](https://github.com/krisakornutama/sovereign-origin) นำชุดนี้ไปใช้เป็นทางส่งข้อมูลระหว่างเครื่องได้โดยตรง (แผนต่อยอดอยู่ใน [PLAN.md](PLAN.md) รายการ Q-01–Q-02)
 
+### 📮 สายส่งมาตรฐานระหว่างโหนด (v1.7) — พิสูจน์แล้วผนึกในคำสั่งเดียว · ตรวจเส้นทางโดยไม่ต้องมีกุญแจ
+
+รุ่น v1.7 เปลี่ยนซองเป็น**สายส่งข้อมูลลับมาตรฐานของระบบ**: `zk prove-bal` / `zk prove` ใส่ธง `--seal-to <kem-pub.json>` — พิสูจน์เสร็จระบบผนึกต่อทันทีใน command เดียว **ผู้ส่งไม่ถือกุญแจลับ KEM แม้บิตเดียว** และเพิ่ม `kem check` — หน้าตรวจเส้นทางซองจาก **metadata ล้วน** (alg · ผู้รับ sha256 · ขนาด · โครงตามมาตรฐาน FIPS 203) ไม่แตะกุญแจลับและไม่ผ่าน GCM เลย ให้โหนดขนส่งจัดแฟ้มต่อได้โดยไม่รู้เนื้อหา; อัตโนมัติตรวจ `--match` เทียบกุญแจสาธารณะของเครื่องเอง และ**ออก exit 1 ทันที** ถ้าโครงซองผิดมาตรฐาน (automation ห้ามส่งต่อ)
+
+**จำลองสายจริง 2 โหนด (สภาพแวดล้อมแยกเครื่องสมบูรณ์ มีข้อความล่าสุดจากเครื่องทดสอบ):**
+
+```none
+$ # — เครื่องโหนดปลายทาง (ผู้จัดการ): เกิดกุญแจหนึ่งครั้ง แล้วแจกแฟ้มกุญแจสาธารณะให้ทุกโหนดที่จะส่งแฟ้มมา
+$ node cli.js kem keygen "ผู้จัดการแฟร์ (โหนดปลายทาง)"
+✓ เกิดกุญแจ KEM (ML-KEM-768 · FIPS 203) สำหรับ "ผู้จัดการแฟร์ (โหนดปลายทาง)" สำเร็จ (13.9 ms)
+  กุญแจลับ   : → data/kem.vault.json  (vault เข้ารหัส Argon2id + AES-256-GCM — sk 2400 ไบต์)
+  กุญแจสาธารณะ: → data/kem-pub.json  (pk 1184 ไบต์ · แจกต่อได้ทุกทาง)
+  pk sha256  : 74953644511c6cb3bcdc1249…
+
+$ # — เครื่องโหนดผู้ส่ง: พิสูจน์ "ยอด ≥ threshold" และผนึกส่ง จบในคำสั่งเดียว
+$ node cli.js zk prove-bal "สมาชิกผู้ส่งสลิป" 250000 --seal-to kem-manager-pub.json
+พิสูจน์ "ยอด ≥ 250000 สตางค์" (ยอดจริงอยู่ในวงจรเท่านั้น ไม่กลายเป็นข้อมูลสาธารณะ)…
+✓ พิสูจน์สำเร็จ → data/zk-balance-20261110.json
+  ใบพิสูจน์  : pqri_thr_1dec95ee  ·  ข้ออ้าง: ยอด ≥ 250000 สตางค์  ·  epoch: 20261110
+  nullifier : 0x1dec95ee2664c73a…  (ผู้ตรวจบันทึก — ไม่รู้ว่าใคร ไม่รู้ยอด)
+  ราก       : 0x278204c5e4f9d63b…
+✓ ผนึกสายส่งสำเร็จ → data/zk-balance-20261110.json.seal.json
+  ปลายทาง  : ผู้จัดการแฟร์ (โหนดปลายทาง)  (pk sha256 74953644511c6cb3…)
+  ขนาดซอง : 3684 ไบต์ (จากเนื้อหา 1330 ไบต์)
+
+$ # — กลางทาง: โหนดขนส่งไม่มีกุญแจอะไรเลย ตรวจเส้นทางซองได้ (metadata ล้วน)
+$ node cli.js kem check data/zk-balance-20261110.json.seal.json
+เส้นทางซอง (metadata ล้วน — ไม่แตะกุญแจลับ ไม่ผ่าน GCM):
+  อัลกอริทึม: sovereign.ml-kem768+aesgcm.v1  ·  v1  ·  profile: sovereign.kem768.v1
+  ผู้รับ    : ผู้จัดการแฟร์ (โหนดปลายทาง)  (pk sha256 74953644511c6cb3bcdc1249…)
+  ขนาด     : เนื้อหา 1330 ไบต์ · ซองทั้งก้อน 3684 ไบต์ · encapsulation 1088 ไบต์ (FIPS 203)
+  สร้างเมื่อ: 2026-11-10T16:33:49.347Z
+  รูปซองครบตามมาตรฐาน — ส่งเป็นเส้นทางต่อได้; เนื้อหาเปิดได้เฉพาะเจ้าของกุญแจเสมอ
+
+$ # — เครื่องโหนดปลายทาง: ยืนยันว่าซองถึงแหล่งที่ถูก (--match เทียบกุญแจเครื่องเอง) แล้วเปิด + ตรวจยอด
+$ node cli.js kem check data/zk-balance-20261110.json.seal.json --match data/kem-pub.json
+  ✓ ตรงกุญแจเครื่องนี้ (data\kem-pub.json · "ผู้จัดการแฟร์ (โหนดปลายทาง)") — ซองมาถึงแหล่งที่ถูก
+
+$ node cli.js kem open data/zk-balance-20261110.json.seal.json
+✓ เปิดซองสำเร็จ (15.7 ms) → data\zk-balance-20261110.json
+  ผู้รับตามซอง: ผู้จัดการแฟร์ (โหนดปลายทาง)  ·  ขนาดเนื้อหา: 1330 ไบต์
+
+$ node cli.js zk verify-bal data/zk-balance-20261110.json
+✓ ใบพิสูจน์ยอดถูกต้อง (vkey ตรวจผ่าน · ทั้งตัวตนและยอดจริงไม่ถูกเปิดเผย)
+  nullifier : 0x1dec95ee2664c73a…  → บันทึกกันซ้ำแล้ว (0 รายการ)
+```
+
+**ทำไมสายนี้ปลอดภัยมาเป็นมาตรฐาน (ผูกกันทุกชั้น):**
+- 🔒 ผู้ส่งถือแค่กุญแจ**สาธารณะ** + กุญแจลับ balance ของตัวเอง (vault แยก) — เครื่องผู้ส่งถูกเจาะกลางทางก็ไม่มีกุญแจ KEM ให้ขโมย
+- 🛰️ โหนดขนส่ง (`kem check`) อ่านได้แต่หน้าซอง — เนื้อหาอยู่หลัง AES-256-GCM (authTag ผูกครบทั้งเนื้อหา); แก้ผ่านกลางทางแม้ 1 ตำแหน่ง = ปลายทางปฏิเสธทันที
+- ✅ ปลายทางตรวจยอดด้วย **vkey ล้วน** (`zk verify-bal`) โดยไม่มีแฟ้มคลังใบยอด — ข้ออ้าง "ยอด ≥ threshold" ยืนยันได้โดยยอดจริงและตัวตนยังปิดมิด
+
 ---
 
 ## ✅ ผลการทดสอบจากเครื่องจริง
@@ -667,8 +724,9 @@ $ npm test
 ✔ kem: ผนึก → เปิด กลับได้ไบต์ตรงเดิม (ไบนารี + ยูนิโคด) และเนื้อหาไม่หลุดในซอง
 ✔ kem: แก้ 1 ตำแหน่งในซอง (ciphertext / nonce / authTag) → open ปฏิเสธทันที
 ✔ kem: ซองของผู้รับรายอื่น → เปิดด้วยกุญแจลับไม่ตรง → ปฏิเสธ (และกุญแจผิดรูปปฏิเสธก่อนถอด)
-✔ kem: ซองถูกแก้โครง (alg/version) หรือรายชื่อผู้รับถูกเแทน → ปฏิเสธก่อนถอด
+✔ kem: ซองถูกแก้โครง (alg/version) หรือรายชื่อผู้รับถูกแทนที่ → ปฏิเสธก่อนถอด
 ✔ kem: vault กุญแจ KEM รอบจริง (createVault → openVault) — passphrase ผิดปฏิเสธและ sk ไม่เขียนลงดิสก์แบบ plaintext
+✔ kem: หน้าเส้นทางซองจาก metadata ล้วน (kem check) — ไม่แตะกุญแจ/ไม่แตะเนื้อหา · โครงผิดทุกระดับจับได้
 ✔ canonical เรียงคีย์ได้เสถียร (bytes เดียวทุกเครื่อง)
 ✔ ยืนยันตัวตน Ed25519 + ML-DSA-44 ทั้งคู่
 ✔ เซ็นใบเสร็จ → ตรวจผ่านทั้งสองลายเซ็น
@@ -709,8 +767,9 @@ $ npm test
 ✔ zk cross-vkey: ใบพิสูจน์ D=5 ตรวจด้วย vkey D=4 → ต้องปฏิเสธ
 ✔ zk cross-circuit: ใบพิสูจน์ membership ตรวจด้วย vkey balance → ต้องปฏิเสธ
 ✔ zk cross-circuit: ใบพิสูจน์ balance ตรวจด้วย vkey membership → ต้องปฏิเสธ (error หรือ false)
+✔ v1.7 (Q-02): สายส่ง KEM ครบสาย — ใบพิสูจน์ยอด → ผนึกฝั่งผู้ส่ง (ไม่ถือกุญแจลับ) → เปิดที่โหนดผู้จัดการ → ตรวจผ่านเท่าต้นฉบับ
 
-ℹ tests 46 · pass 46 · fail 0 · duration ~132 s — กินเวลาราว 2 นาทีเพราะเทสเซ็นชั้น SLH-DSA จริง (~22 วิ/ลายเซ็น) ตามข้อจำกัดที่ประกาศไว้
+ℹ tests 48 · pass 48 · fail 0 · duration ~136 s — กินเวลาราว 2 นาทีเพราะเทสเซ็นชั้น SLH-DSA จริง (~22 วิ/ลายเซ็น) ตามข้อจำกัดที่ประกาศไว้
 ```
 
 ```
@@ -749,6 +808,7 @@ repo นี้คือ**ชั้นตรวจสอบอัตลักษ�
 | ✅ **v1.4 — บังเกตุจากเครื่องจริง** | **SLH-DSA (FIPS 205) ชั้นที่สาม + หมุนเวียนกุญแจ** — โปรไฟล์ `--slh` เลือกใช้ · `rotate` + สายสกุลกุญแจสาธารณะ (`anchors.jsonl`) · เกตอัตโนมัติ `--if-due` · ใบเก่า back-compat 100% · 33/33 ทดสอบ | พร้อมใช้ |
 | ✅ **v1.5 — บังเกตุจากเครื่องจริง** | **โปรไฟล์ลึก D=5 (32 ช่อง) + พิธีหลายฝ่าย** — `membership_d5.circom` / `balance_d5.circom` · `scripts/ceremony.mjs` (chain: setup → contribute×2 → verify ZKey Ok! → export vkey) · CLI ธง `--deep` ครบทุกคำสั่ง tree/prove/verify/balance-tree/prove-bal/verify-bal · verify เลือก vkey จาก field `circuit` ในใบ · cross-vkey/cross-circuit rejection · `artifacts/ceremony.json` manifest · 40/40 ทดสอบ | พร้อมใช้ |
 | ✅ **v1.6 — บังเกตุจากเครื่องจริง** | **ML-KEM (FIPS 203) — ซองเข้ารหัสแฟ้มระหว่างโหนด** — `src/kem.js` (ML-KEM-768 + AES-256-GCM · กุญแจ session = SHA-256("sovereign-kem/v1" ‖ sharedSecret)) · CLI `kem keygen/pub/seal/open` · vault แยก `data/kem.vault.json` (env `SOVEREIGN_KEM_PASS`) · ผูกผู้รับด้วย `public_key_sha256` (ไม่ขน pk ในซอง) · ซองถูกแก้ 1 ตำแหน่ง = ปฏิเสธ · 6/6 ทดสอบ · ซอง 1 KiB → 3,206 B (ส่วนหัวตายตัว 1,835 B) · seal/open 1 KiB ~1.8/1.4 ms | พร้อมใช้ |
+| ✅ **v1.7 — บังเกตุจากเครื่องจริง** | **สายส่งข้อมูลลับมาตรฐานระหว่างโหนด** — `--seal-to <kem-pub.json>` บน `zk prove` / `zk prove-bal` (พิสูจน์แล้วผนึกต่อในคำสั่งเดียว — ผู้ส่งไม่ถือกุญแจลับ KEM) · `kem check <ซอง.seal.json> [--match]` ตรวจเส้นทางจาก metadata ล้วน (โหนดขนส่งไม่ต้องมีกุญแจ · โครงผิดมาตรฐาน FIPS 203 = exit 1 ห้าม automation ส่งต่อ) · sandbox 2 โหนดครบสาย: prove-bal → seal → check → open → verify-bal ผ่าน · 48/48 ทดสอบ | พร้อมใช้ |
 | 🧩 **เฟสถัดไป** | Falcon (FIPS 206 / FN-DSA) เมื่อ finalize — คงพับตามนโยบาย "หยิบที่จบมาใช้ก่อน" (NIST ยืนยัน 27 ต.ค. 2026: FIPS 206 ยังเป็น "selected for ongoing standardization") | วางแผน |
 
 ---

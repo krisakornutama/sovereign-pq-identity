@@ -5,7 +5,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { loadPoseidon, buildTree, pathFor, newMemberSecret, MERKLE_DEPTH, MAX_MEMBERS, DEEP_DEPTH } from '../src/merkle.js';
-import { proveMembership, verifyMembership, artifactsReady, loadNullifierLedger, isNullifierSpent, appendNullifier, proveBalance, verifyBalance, artifactsReadyBalance, artifactsReadyDeep, artifactsReadyBalanceDeep, ARTIFACTS_DEEP, ARTIFACTS_BALANCE_DEEP, CIRCUIT } from '../src/zk.js';
+import { proveMembership, verifyMembership, artifactsReady, loadNullifierLedger, isNullifierSpent, appendNullifier, proveBalance, verifyBalance, artifactsReadyBalance, artifactsReadyDeep, artifactsReadyBalanceDeep, ARTIFACTS_DEEP, ARTIFACTS_BALANCE_DEEP, CIRCUIT, balanceReceipt } from '../src/zk.js';
+import { kemKeygen, kemPublicFile, sealBytes, openEnvelope, envelopePublicInfo } from '../src/kem.js';
 
 const READY = artifactsReady();
 const READY_BAL = artifactsReadyBalance();
@@ -229,4 +230,39 @@ test('zk cross-circuit: ใบพิสูจน์ balance ตรวจด้�
     ok = false;
   }
   assert.equal(ok, false);
+});
+
+test('v1.7 (Q-02): สายส่ง KEM ครบสาย — ใบพิสูจน์ยอด → ผนึกฝั่งผู้ส่ง (ไม่ถือกุญแจลับ) → เปิดที่โหนดผู้จัดการ → ตรวจผ่านเท่าต้นฉบับ', { skip: !READY_BAL && 'ยังไม่มี artifacts balance (wasm/zkey/vkey)' }, async () => {
+  const poseidon = await loadPoseidon();
+  const balance = 700_000n;
+  const blinding = newMemberSecret(randomBytes);
+  const commitment = poseidon.balanceLeafOf(balance, blinding);
+  const tree = buildTree([commitment], poseidon);
+  const epoch = 20261110n;
+  const threshold = 250_000n;
+  const { proof, publicSignals } = await proveBalance({ balance, blinding, path: pathFor(tree, 0), root: tree.root, epoch, threshold });
+  const rec = balanceReceipt({ proof, publicSignals, epoch, threshold, circuit: CIRCUIT.balance });
+  // ฝั่งผู้ส่ง: ผนึกด้วยกุญแจสาธารณะของผู้จัดการเท่านั้น — ไม่มีกุญแจลับใดถูกถอดในเครื่องนี้
+  const manager = kemKeygen();
+  const managerPub = kemPublicFile({ label: 'ผู้จัดการกลุ่ม', pk_b64: manager.pk_b64 });
+  const sealed = sealBytes(new Uint8Array(Buffer.from(JSON.stringify(rec), 'utf8')), managerPub);
+  const info = envelopePublicInfo(sealed);
+  assert.equal(info.recipient_sha256, managerPub.public_key_sha256);
+  assert.deepEqual(info.anomalies, []);
+  // "กลางทาง": แก้ 1 ตำแหน่งในซอง → เปิดไม่ขึ้น (GCM จับทันที ผู้โจมตีแก้สลิปผ่านเครื่องขนส่งไม่ได้)
+  const mid = Math.floor(sealed.ciphertext_b64.length / 2);
+  const swapped = sealed.ciphertext_b64[mid] === 'A' ? 'B' : 'A';
+  const tampered = { ...sealed, ciphertext_b64: sealed.ciphertext_b64.slice(0, mid) + swapped + sealed.ciphertext_b64.slice(mid + 1) };
+  assert.throws(() => openEnvelope(tampered, manager.sk_b64), /เปิดซองไม่ได้/);
+  // ฝั่งผู้จัดการ (โหนดปลายทาง เปิดด้วยกุญแจลับของตัวเอง): ไบต์ตรงต้นฉบับเป๊ะ + ตรวจยอดด้วย vkey ผลเดียวกับของแท้
+  const opened = JSON.parse(openEnvelope(sealed, manager.sk_b64).toString('utf8'));
+  assert.equal(opened.receiptId, rec.receiptId);
+  assert.equal(JSON.stringify(opened), JSON.stringify(rec));
+  const signals10 = {
+    merkleRoot: BigInt(opened.publicSignals.merkleRoot).toString(10),
+    nullifierHash: BigInt(opened.publicSignals.nullifierHash).toString(10),
+    epochNonce: BigInt(opened.publicSignals.epochNonce).toString(10),
+    threshold: BigInt(opened.publicSignals.threshold).toString(10),
+  };
+  assert.equal(await verifyBalance({ proof: opened.zkProof, publicSignals: signals10 }), true);
 });

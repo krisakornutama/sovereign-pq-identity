@@ -129,3 +129,50 @@ export function openEnvelope(envelope, skB64) {
   }
   return plain;
 }
+
+// ==== สายส่งมาตรฐาน (v1.7 · Q-02) — หน้าเส้นทางซองจาก metadata ล้วน ====
+// ที่หมาย: โหนดขนส่งระหว่างกัน route แฟ้มได้โดยไม่มีกุญแจและไม่ผ่าน GCM แม้บิตเดียว — ไม่มีทางรั่วเนื้อหา
+// ยืนยัน "ซองนี้ไปหาใคร" ด้วย public_key_sha256 คือการแมตช์แฟ้มกุญแจสาธารณะที่เครื่องถืออยู่เท่านั้น
+export function envelopePublicInfo(envelope) {
+  if (!envelope || typeof envelope !== 'object') {
+    throw new Error('แฟ้มนี้ไม่ใช่ซอง sovereign (ไม่มีโครง JSON ของซอง)');
+  }
+  if (envelope.alg !== KEM_ALG) {
+    throw new Error('ซองไม่ใช่อัลกอริทึมของระบบนี้ (alg: ' + JSON.stringify(envelope.alg) + ')');
+  }
+  if (envelope.version !== 1) {
+    throw new Error('version ของซองไม่รองรับ: ' + JSON.stringify(envelope.version) + ' — ปฏิเสธเส้นทาง');
+  }
+  if (!envelope.recipient || typeof envelope.recipient.public_key_sha256 !== 'string' || envelope.recipient.public_key_sha256.length !== 64) {
+    throw new Error('ซองไม่ระบุปลายทางผู้รับ (public_key_sha256) — เส้นทางไม่ได้');
+  }
+  const encCipher = Buffer.from(envelope.encapsulated_cipher_b64 || '', 'base64');
+  const nonce = Buffer.from(envelope.nonce_b64 || '', 'base64');
+  const authTag = Buffer.from(envelope.auth_tag_b64 || '', 'base64');
+  const ct = Buffer.from(envelope.ciphertext_b64 || '', 'base64');
+  const anomalies = [];
+  if (encCipher.length !== LEN.cipherText) anomalies.push('encapsulated_cipher ผิดขนาด (' + encCipher.length + ' ไบต์ — มาตรฐาน FIPS 203 คือ ' + LEN.cipherText + ') — เปิดไม่ขึ้นทุกโหนด');
+  if (nonce.length !== 12) anomalies.push('nonce ผิดขนาด (' + nonce.length + ' ไบต์ — มาตรฐาน 12)');
+  if (authTag.length !== 16) anomalies.push('authTag ผิดขนาด (' + authTag.length + ' ไบต์ — มาตรฐาน 16)');
+  if (ct.length === 0) anomalies.push('เนื้อหาเข้ารหัส (ciphertext) ว่างเปล่า');
+  return {
+    alg: envelope.alg,
+    version: envelope.version,
+    profile: envelope.profile || '',
+    created_at: envelope.created_at || '(ไม่ระบุ)',
+    recipient_label: envelope.recipient.label || '(ไม่มีชื่อ)',
+    recipient_sha256: envelope.recipient.public_key_sha256,
+    plaintext_length: typeof envelope.plaintext_length === 'number' ? envelope.plaintext_length : null,
+    envelope_bytes: Buffer.byteLength(JSON.stringify(envelope)),
+    encapsulated_cipher_bytes: encCipher.length,
+    anomalies,
+  };
+}
+
+// sha256 ของกุญแจสาธารณะจากแฟ้ม pub — คำนวณตรงจาก b64 (ไม่เชื่อ field ประกาศลอย) สำหรับเทียบเส้นทาง kem check
+export function pubSha256(pubFile) {
+  if (!pubFile || pubFile.profile !== KEM_PROFILE || typeof pubFile.public_key_b64 !== 'string') {
+    throw new Error('แฟ้มกุญแจสาธารณะไม่ใช่ของระบบนี้ (ต้องออกจาก kem keygen)');
+  }
+  return sha256hex(Buffer.from(pubFile.public_key_b64, 'base64'));
+}

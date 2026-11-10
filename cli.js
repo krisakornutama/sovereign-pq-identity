@@ -11,7 +11,7 @@ import { readPassphrase, passphraseFromEnv } from './src/password.js';
 import { canonical } from './src/util.js';
 import { loadPoseidon, buildTree, pathFor, newMemberSecret, MAX_MEMBERS, MERKLE_DEPTH, DEEP_DEPTH, capacityFromRootFile, depthFromRootFile } from './src/merkle.js';
 import { proveMembership, verifyMembership, anonReceipt, loadNullifierLedger, isNullifierSpent, appendNullifier, artifactsReady, artifactsReadyDeep, proveBalance, verifyBalance, balanceReceipt, artifactsReadyBalance, artifactsReadyBalanceDeep, CIRCUIT } from './src/zk.js';
-import { kemKeygen, kemPublicFile, sealBytes, openEnvelope, KEM_PROFILE } from './src/kem.js';
+import { kemKeygen, kemPublicFile, sealBytes, openEnvelope, envelopePublicInfo, pubSha256, KEM_PROFILE } from './src/kem.js';
 import { randomBytes } from 'node:crypto';
 
 const IDENT = 'data/identity.json';
@@ -27,6 +27,35 @@ const ANCHORS = 'data/anchors.jsonl';            // สายสกุลกุ�
 const KVAULT = 'data/kem.vault.json';            // v1.6 (Q-01): กุญแจลับ ML-KEM (sk) เก็บ vault เข้ารหัสแยกชั้นของตัวเอง
 const KPUB = 'data/kem-pub.json';                // v1.6: กุญแจสาธารณะ ML-KEM — แจกได้ทุกทาง (public ล้วน)
 const C = { g: (s) => `\x1b[32m${s}\x1b[0m`, y: (s) => `\x1b[33m${s}\x1b[0m`, r: (s) => `\x1b[31m${s}\x1b[0m`, b: (s) => `\x1b[36m${s}\x1b[0m`, dim: (s) => `\x1b[2m${s}\x1b[0m` };
+
+// ดึงธงที่มีค่าออกจาก args แล้วคืนรายการที่เหลือ — ธง + ค่าถูกถอดรวม ให้ตำแหน่ง positional ไม่เพี้ยนเวลาธงวางหน้า/หลัง
+function extractFlag(args, name) {
+  const i = Array.isArray(args) ? args.indexOf(name) : -1;
+  if (i < 0) return { rest: args, value: null };
+  return { rest: args.slice(0, i).concat(args.slice(i + 2)), value: args[i + 1] || null };
+}
+
+// ผนึกแฟ้มที่เพิ่งเขียนส่งถึงเจ้าของกุญแจสาธารณะ (สายส่งมาตรฐาน v1.7 · Q-02) — ผู้ส่งไม่ต้องมีกุญแจลับ KEM เลย
+function sealFileTo(file, pubPath) {
+  if (!pubPath) { console.error(C.r('ธง --seal-to ต้องตามด้วยแฟ้มกุญแจสาธารณะ เช่น --seal-to data/kem-pub.json')); process.exit(1); }
+  if (!fs.existsSync(pubPath)) { console.error(C.r('ไม่พบแฟ้มกุญแจสาธารณะ ' + pubPath + ' — ขอแฟ้มนี้จากผู้รับ (เกิดจาก: node cli.js kem keygen)')); process.exit(1); }
+  let pub;
+  try { pub = JSON.parse(fs.readFileSync(pubPath, 'utf8')); } catch { console.error(C.r('แฟ้ม ' + pubPath + ' ไม่ใช่ JSON ที่อ่านได้ — แฟ้มกุญแจสาธารณะเสียหาย')); process.exit(1); }
+  try {
+    const seal = sealBytes(new Uint8Array(fs.readFileSync(file)), pub);
+    const sealFile = file + '.seal.json';
+    fs.writeFileSync(sealFile, JSON.stringify(seal, null, 2));
+    console.log(C.g('✓ ผนึกสายส่งสำเร็จ → ' + sealFile));
+    console.log('  ปลายทาง  : ' + C.b(seal.recipient.label) + '  (pk sha256 ' + seal.recipient.public_key_sha256.slice(0, 16) + '…)');
+    console.log('  ขนาดซอง : ' + Buffer.byteLength(JSON.stringify(seal)) + ' ไบต์ (จากเนื้อหา ' + seal.plaintext_length + ' ไบต์)');
+    console.log(C.dim('  แฟ้มซองผ่านช่องทางกลางใดก็ได้ — โหนดขนส่งตรวจเส้นทางได้ด้วย: node cli.js kem check ' + sealFile));
+    console.log(C.dim('  ผู้รับเปิดเองด้วยกุญแจลับของตัวเอง: node cli.js kem open ' + sealFile));
+    return sealFile;
+  } catch (e) {
+    console.error(C.r('✗ ผนึกสายส่งไม่สำเร็จ: ' + e.message));
+    process.exit(1);
+  }
+}
 
 const [cmd, ...rest] = process.argv.slice(2);
 
@@ -266,22 +295,23 @@ if (cmd === 'keygen') {
   node cli.js zk enroll "ชื่อสมาชิก"           ลงทะเบียนสมาชิก (สูงสุด 32 คนสำหรับโปรไฟล์ลึก)
   node cli.js zk list                          อ่านทะเบียน (เห็น commitment เท่านั้น ไม่มีตัวตน)
   node cli.js zk tree [--deep]                 คำนวณรากสมาชิก + เขียน data/members_root.json (--deep = โปรไฟล์ลึก D=5)
-  node cli.js zk prove "ชื่อสมาชิก" [epoch]    พิสูจน์นิรนาม → แฟ้มใบพิสูจน์ data/zk-receipt-<epoch>.json (อ่านโปรไฟล์จากไฟล์ราก)
+  node cli.js zk prove "ชื่อสมาชิก" [epoch]    พิสูจน์นิรนาม → data/zk-receipt-<epoch>.json (ธง --seal-to <kem-pub.json> = ผนึกในคำสั่งเดียว v1.7)
   node cli.js zk verify <แฟ้มใบพิสูจน์.json>   ฝั่งโหนดตรวจ: vkey ตาม field circuit ในใบ + กัน nullifier ซ้ำ (exit 0 = ผ่าน)
 
   node cli.js zk issue "ชื่อ" <สตางค์>       ออกใบยอด (สูงสุด 32 ใบสำหรับโปรไฟล์ลึก)
   node cli.js zk issue-list                  อ่านทะเบียนใบยอด (เห็น commitment เท่านั้น ไม่มียอด)
   node cli.js zk balance-tree [--deep]       คำนวณรากใบยอด + เขียน data/balances_root.json (--deep = โปรไฟล์ลึก D=5)
-  node cli.js zk prove-bal "ชื่อ" <threshold> [epoch]  พิสูจน์ "ยอด ≥ threshold" → data/zk-balance-<epoch>.json (อ่านโปรไฟล์จากไฟล์ราก)
+  node cli.js zk prove-bal "ชื่อ" <threshold> [epoch]  พิสูจน์ "ยอด ≥ threshold" → data/zk-balance-<epoch>.json (ธง --seal-to <kem-pub.json> = ผนึกในคำสั่งเดียว v1.7)
   node cli.js zk verify-bal <แฟ้ม.json>      ฝั่งโหนดตรวจยอด: vkey ตาม field circuit ในใบ + กัน nullifier ซ้ำ (exit 0 = ผ่าน)
 
   สำหรับ automation (หลีกเลี่ยง prompt): กำหนด SOVEREIGN_MEMBER_PASS=... สำหรับ vault สมาชิก · SOVEREIGN_BALANCE_PASS=... สำหรับคลังใบยอด (แฟ้มแยก passphrase แยกกัน)
 
-  ML-KEM (FIPS 203 — ซองเข้ารหัสไฟล์ระหว่างโหนด v1.6):
+  ML-KEM (FIPS 203 — ซองเข้ารหัส + สายส่งมาตรฐาน v1.7):
   node cli.js kem keygen "ชื่อผู้รับ"          เกิดกุญแจ ML-KEM-768 (sk เข้า data/kem.vault.json · pk ลง data/kem-pub.json)
   node cli.js kem pub                          อ่านแฟ้มกุญแจสาธารณะ (แจกได้ทุกทาง — public ล้วน)
   node cli.js kem seal <ไฟล์> --to <kem-pub.json> [--out <แฟ้ม.ออก>]   ผนึกไฟล์ส่งเจ้าของกุญแจนั้น (ผู้ส่งไม่ต้องมีกุญแจลับ)
   node cli.js kem open <ซอง.seal.json> [--out <path> --force]         เปิดซองด้วยกุญแจลับในเครื่อง (แก้ 1 บิต = ปฏิเสธ)
+  node cli.js kem check <ซอง.seal.json> [--match <kem-pub.json>]      ตรวจเส้นทางซองจาก metadata ล้วน (ไม่ต้องมีกุญแจ — โหนดขนส่งใช้ได้)
 
   สำหรับ automation: กำหนด SOVEREIGN_KEM_PASS=... สำหรับ vault กุญแจ KEM (แยกชั้นจาก vault อื่น)`);
 }
@@ -412,9 +442,10 @@ async function zkNamespace(rest) {
     console.log('  สมาชิก ' + pub.length + ' จากความจุสูงสุด ' + capacity);
     console.log(C.dim('  แฟ้มราก: data/members_root.json — ผู้ตรวจถือแฟ้มนี้เท่านั้น'));
   } else if (sub === 'prove') {
-    const label = rest[1] || '';
-    if (!label) { console.error(C.r('ใช้งาน: node cli.js zk prove "ชื่อสมาชิก" [epoch=YYYYMMDD]')); process.exit(1); }
-    const epoch = rest[2] ? Number(rest[2]) : todayEpoch();
+    const { rest: pRest, value: sealTo } = extractFlag(rest, '--seal-to');
+    const label = pRest[1] || '';
+    if (!label) { console.error(C.r('ใช้งาน: node cli.js zk prove "ชื่อสมาชิก" [epoch=YYYYMMDD] [--seal-to <kem-pub.json>]')); process.exit(1); }
+    const epoch = pRest[2] ? Number(pRest[2]) : todayEpoch();
     if (!fs.existsSync('data/members_root.json')) { console.error(C.r('ยังไม่มี data/members_root.json — รัน: node cli.js zk tree')); process.exit(1); }
     const rootFile = JSON.parse(fs.readFileSync('data/members_root.json', 'utf8'));
     const depth = depthFromRootFile(rootFile);
@@ -450,6 +481,7 @@ async function zkNamespace(rest) {
     console.log('  ราก       : ' + rec.publicSignals.merkleRoot.slice(0, 18) + '…');
     console.log('  วงจร      : ' + C.b(circuit));
     console.log(C.dim('  โหนดตรวจ: node cli.js zk verify ' + file));
+    if (sealTo) sealFileTo(file, sealTo);
     process.exit(0);
   } else if (sub === 'verify') {
     const file = rest[1] || '';
@@ -538,13 +570,14 @@ async function zkNamespace(rest) {
     console.log('  ' + pub.length + ' ใบจากความจุ ' + capacity);
     console.log(C.dim('  แฟ้มราก: ' + BROOT + ' — issuer ต้องประกาศรากนี้ให้ผู้ตรวจถือค้างไว้ (ใบนอกรากนี้ = ผู้ตรวจปฏิเสธ)'));
   } else if (sub === 'prove-bal') {
-    const label = rest[1] || '';
-    const thrStr = rest[2] || '';
-    if (!label || !thrStr) { console.error(C.r('ใช้งาน: node cli.js zk prove-bal "ชื่อ" <threshold สตางค์> [epoch]')); process.exit(1); }
+    const { rest: bRest, value: sealTo } = extractFlag(rest, '--seal-to');
+    const label = bRest[1] || '';
+    const thrStr = bRest[2] || '';
+    if (!label || !thrStr) { console.error(C.r('ใช้งาน: node cli.js zk prove-bal "ชื่อ" <threshold สตางค์> [epoch] [--seal-to <kem-pub.json>]')); process.exit(1); }
     let thresholdBig;
     try { thresholdBig = BigInt(thrStr); } catch { console.error(C.r('threshold ต้องเป็นจำนวนเต็ม (สตางค์)')); process.exit(1); }
     if (thresholdBig < 1n || thresholdBig > BAL_MAX) { console.error(C.r('threshold ต้องอยู่ในช่วงจำนวนเต็ม 64 บิต')); process.exit(1); }
-    const epoch = rest[3] ? Number(rest[3]) : todayEpoch();
+    const epoch = bRest[3] ? Number(bRest[3]) : todayEpoch();
     if (!fs.existsSync(BROOT)) { console.error(C.r('ยังไม่มี ' + BROOT + ' — รัน: node cli.js zk balance-tree')); process.exit(1); }
     const rootFile = JSON.parse(fs.readFileSync(BROOT, 'utf8'));
     const depth = depthFromRootFile(rootFile);
@@ -589,6 +622,7 @@ async function zkNamespace(rest) {
     console.log('  ราก       : ' + rec.publicSignals.merkleRoot.slice(0, 18) + '…');
     console.log('  วงจร      : ' + C.b(circuit));
     console.log(C.dim('  โหนดตรวจ: node cli.js zk verify-bal ' + file));
+    if (sealTo) sealFileTo(file, sealTo);
     process.exit(0);
   } else if (sub === 'verify-bal') {
     const file = rest[1] || '';
@@ -643,7 +677,7 @@ async function zkNamespace(rest) {
       '  node cli.js zk issue "ชื่อ" <สตางค์>           ออกใบยอด (สูงสุด 32 ใบ)',
       '  node cli.js zk issue-list                    ดูทะเบียนใบยอด',
       '  node cli.js zk balance-tree [--deep]         คำนวณรากใบยอด (--deep = โปรไฟล์ลึก D=5)',
-      '  node cli.js zk prove-bal "ชื่อ" <threshold> [epoch]  พิสูจน์ "ยอด ≥ threshold" (อ่านโปรไฟล์จาก data/balances_root.json)',
+      '  node cli.js zk prove-bal "ชื่อ" <threshold> [epoch]  พิสูจน์ "ยอด ≥ threshold" (ธง --seal-to <kem-pub.json> = ผนึกในคำสั่งเดียว v1.7)',
       '  node cli.js zk verify-bal <file>             ฝั่งโหนดตรวจยอด (เลือก vkey จาก field circuit ในใบ)',
       '',
       '  สิทธิ์ 1 คน / 1 ใบ / 1 รอบ (epoch) — nullifier กันการใช้ซ้ำ โดยไม่เผยว่าใคร และไม่เผยยอดจริง',
@@ -750,13 +784,52 @@ async function kemNamespace(rest) {
     console.log('  ผู้รับตามซอง: ' + C.b(seal.recipient.label) + '  ·  ขนาดเนื้อหา: ' + plain.length + ' ไบต์');
     console.log('  alg        : ' + C.b(seal.alg));
     console.log(C.dim('  การตรวจถ้าไบต์ใดในซองถูกแก้แม้ 1 ตำแหน่ง: ปฏิเสธทันที (GCM authTag ไม่ตรง)'));
+  } else if (sub === 'check') {
+    // สายส่งมาตรฐาน (v1.7 · Q-02): อ่านหน้าซองจาก metadata ล้วน — โหนดที่ไม่มีกุญแจก็จัดเส้นทางได้
+    const { rest: cRest, value: matchArg } = extractFlag(rest, '--match');
+    const sealPath = cRest[1] || '';
+    if (!sealPath) { console.error(C.r('ใช้งาน: node cli.js kem check <ซอง.seal.json> [--match <kem-pub.json>]')); process.exit(1); }
+    if (!fs.existsSync(sealPath)) { console.error(C.r('ไม่พบซอง ' + sealPath)); process.exit(1); }
+    let envelope;
+    try { envelope = JSON.parse(fs.readFileSync(sealPath, 'utf8')); } catch {
+      console.error(C.r('แฟ้ม ' + sealPath + ' ไม่ใช่ JSON ที่อ่านได้ — แฟ้มซองเสียหายหรือไม่ใช่ซอง'));
+      process.exit(1);
+    }
+    let info;
+    try { info = envelopePublicInfo(envelope); } catch (e) { console.error(C.r('✗ ' + e.message)); process.exit(1); }
+    console.log(C.g('เส้นทางซอง (metadata ล้วน — ไม่แตะกุญแจลับ ไม่ผ่าน GCM):'));
+    console.log('  อัลกอริทึม: ' + C.b(info.alg) + '  ·  v' + info.version + (info.profile ? '  ·  profile: ' + info.profile : ''));
+    console.log('  ผู้รับ    : ' + C.b(info.recipient_label) + '  (pk sha256 ' + info.recipient_sha256.slice(0, 24) + '…)');
+    console.log('  ขนาด     : เนื้อหา ' + (info.plaintext_length === null ? 'ไม่ระบุ' : info.plaintext_length + ' ไบต์') + ' · ซองทั้งก้อน ' + info.envelope_bytes + ' ไบต์ · encapsulation ' + info.encapsulated_cipher_bytes + ' ไบต์ (FIPS 203)');
+    console.log('  สร้างเมื่อ: ' + info.created_at);
+    const matchPath = matchArg || (fs.existsSync(KPUB) ? KPUB : null);
+    if (matchPath && fs.existsSync(matchPath)) {
+      try {
+        const localPub = JSON.parse(fs.readFileSync(matchPath, 'utf8'));
+        if (pubSha256(localPub) === info.recipient_sha256) {
+          console.log(C.g('  ✓ ตรงกุญแจเครื่องนี้ (' + matchPath + ' · "' + localPub.label + '") — ซองมาถึงแหล่งที่ถูก: node cli.js kem open ' + sealPath));
+        } else {
+          console.log(C.y('  ✗ ไม่ใช่ปลายทางของเครื่องนี้ (' + matchPath + ' · "' + localPub.label + '") — ผู้รับคือโหนดอื่น เส้นทางแยก'));
+        }
+      } catch (e) {
+        console.error(C.y('  ⚠ แฟ้มเทียบ ' + matchPath + ' ใช้ไม่ได้ (' + e.message.slice(0, 44) + ') — ข้าม'));
+      }
+    }
+    if (info.anomalies.length === 0) {
+      console.log(C.dim('  รูปซองครบตามมาตรฐาน — ส่งเป็นเส้นทางต่อได้; เนื้อหาเปิดได้เฉพาะเจ้าของกุญแจเสมอ'));
+    } else {
+      for (const a of info.anomalies) console.error(C.y('  ⚠ ' + a));
+      console.error(C.r('โครงซองไม่อยู่ในมาตรฐาน — automation ห้ามส่งต่อ (exit 1)'));
+      process.exit(1);
+    }
   } else {
     console.log([
-      'คำสั่ง kem (ML-KEM-768 · FIPS 203 — ซองเข้ารหัสไฟล์ระหว่างโหนด v1.6):',
+      'คำสั่ง kem (ML-KEM-768 · FIPS 203 — ซองเข้ารหัส + สายส่งมาตรฐาน v1.7):',
       '  node cli.js kem keygen "ชื่อผู้รับ"   เกิดกุญแจ KEM (sk → vault เข้ารหัส · pk → data/kem-pub.json)',
       '  node cli.js kem pub                   อ่านแฟ้มกุญแจสาธารณะ (แจกต่อได้)',
       '  node cli.js kem seal <ไฟล์> --to <kem-pub.json>   ผนึกไฟล์ส่งเจ้าของกุญแจ (ciphertext + encapsulation ตาม FIPS 203)',
       '  node cli.js kem open <ซอง.seal.json>  เปิดซองด้วยกุญแจลับในเครื่อง (ซองถูกแก้ 1 บิต = ปฏิเสธ)',
+      '  node cli.js kem check <ซอง.seal.json> ตรวจเส้นทางซองจาก metadata ล้วน (ไม่ต้องมีกุญแจ — โหนดขนส่งใช้ได้)',
       '',
       '  หลัก: ผู้ส่งถือมีแต่กุญแจสาธารณะของผู้รับ — ผู้รับเปิดได้เฉพาะกุญแจลับของตัวเองเท่านั้น',
       '  automation: กำหนด SOVEREIGN_KEM_PASS=... (vault กุญแจ KEM แยกชั้นจาก vault อื่น)',

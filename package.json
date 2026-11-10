@@ -1,7 +1,7 @@
 {
   "name": "sovereign-pq-identity",
-  "version": "1.6.0",
-  "description": "Post-Quantum Identity for Sovereign OS — pseudonymous identity + dual-signed receipts (Ed25519 + ML-DSA-44, FIPS 204) + optional third layer SLH-DSA (FIPS 205) with key rotation + ZK-SNARK proofs (anonymous membership & balance threshold, Groth16) + ML-KEM (FIPS 203) hybrid encryption envelopes for files between nodes. Offline-first, zero cloud.",
+  "version": "1.7.0",
+  "description": "Post-Quantum Identity for Sovereign OS — pseudonymous identity + dual-signed receipts (Ed25519 + ML-DSA-44, FIPS 204) + optional third layer SLH-DSA (FIPS 205) with key rotation + ZK-SNARK proofs (anonymous membership & balance threshold, Groth16) + ML-KEM (FIPS 203) hybrid envelopes as the standard sealed file transport between nodes. Offline-first, zero cloud.",
   "main": "cli.js",
   "type": "module",
   "scripts": {
