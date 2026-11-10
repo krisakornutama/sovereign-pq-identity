@@ -1,11 +1,11 @@
 {
   "name": "sovereign-pq-identity",
-  "version": "1.7.0",
-  "description": "Post-Quantum Identity for Sovereign OS — pseudonymous identity + dual-signed receipts (Ed25519 + ML-DSA-44, FIPS 204) + optional third layer SLH-DSA (FIPS 205) with key rotation + ZK-SNARK proofs (anonymous membership & balance threshold, Groth16) + ML-KEM (FIPS 203) hybrid envelopes as the standard sealed file transport between nodes. Offline-first, zero cloud.",
+  "version": "1.8.0",
+  "description": "Post-Quantum Identity for Sovereign OS — pseudonymous identity + dual-signed receipts (Ed25519 + ML-DSA-44, FIPS 204) + optional third layer SLH-DSA (FIPS 205) with key rotation + ZK-SNARK proofs (anonymous membership & balance threshold, Groth16) + ML-KEM (FIPS 203) hybrid envelopes as the standard sealed file transport between nodes, with chunked streaming seals for very large files. Offline-first, zero cloud.",
   "main": "cli.js",
   "type": "module",
   "scripts": {
-    "test": "node --test --test-force-exit test/pq-identity.test.js test/vault.test.js test/zk.test.js test/kem.test.js",
+    "test": "node --test --test-force-exit test/pq-identity.test.js test/vault.test.js test/zk.test.js test/kem.test.js test/kem-stream.test.js",
     "selftest": "node cli.js selftest",
     "demo": "node cli.js demo",
     "ledger": "node cli.js ledger"

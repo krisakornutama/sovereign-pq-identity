@@ -12,6 +12,7 @@ import { canonical } from './src/util.js';
 import { loadPoseidon, buildTree, pathFor, newMemberSecret, MAX_MEMBERS, MERKLE_DEPTH, DEEP_DEPTH, capacityFromRootFile, depthFromRootFile } from './src/merkle.js';
 import { proveMembership, verifyMembership, anonReceipt, loadNullifierLedger, isNullifierSpent, appendNullifier, artifactsReady, artifactsReadyDeep, proveBalance, verifyBalance, balanceReceipt, artifactsReadyBalance, artifactsReadyBalanceDeep, CIRCUIT } from './src/zk.js';
 import { kemKeygen, kemPublicFile, sealBytes, openEnvelope, envelopePublicInfo, pubSha256, KEM_PROFILE } from './src/kem.js';
+import { sealStreamFile, openStreamFile, readStreamHeader, streamHeaderInfo, verifyStreamChain, STREAM_CHUNK_DEFAULT, STREAM_FORMAT } from './src/kem-stream.js';
 import { randomBytes } from 'node:crypto';
 
 const IDENT = 'data/identity.json';
@@ -731,15 +732,33 @@ async function kemNamespace(rest) {
     console.log(C.dim('  คู่เทรดใช้แฟ้มนี้ในคำสั่ง: node cli.js kem seal <ไฟล์> --to ' + KPUB));
   } else if (sub === 'seal') {
     const fileArg = rest[1] || '';
-    if (!fileArg) { console.error(C.r('ใช้งาน: node cli.js kem seal <ไฟล์> --to <kem-pub.json> [--out <แฟ้ม.ออก>]')); process.exit(1); }
+    if (!fileArg) { console.error(C.r('ใช้งาน: node cli.js kem seal <ไฟล์> --to <kem-pub.json> [--stream [ขนาดชิ้นไบต์]] [--out <แฟ้มออก>]')); process.exit(1); }
     const toIdx = rest.indexOf('--to');
     const pubPath = toIdx > 0 ? rest[toIdx + 1] : KPUB;
     if (!fs.existsSync(fileArg)) { console.error(C.r('ไม่พบแฟ้ม ' + fileArg)); process.exit(1); }
     if (!fs.existsSync(pubPath)) { console.error(C.r('ไม่พบแฟ้มกุญแจสาธารณะ ' + pubPath + ' — ขอแฟ้มนี้จากผู้รับ (เกิดจาก kem keygen)')); process.exit(1); }
     const pub = JSON.parse(fs.readFileSync(pubPath, 'utf8'));
+    const out = rest.indexOf('--out') > 0 ? rest[rest.indexOf('--out') + 1] : (fileArg + '.seal.json');
+    const streamIdx = rest.indexOf('--stream');
+    if (streamIdx >= 0) {
+      // ซองสตรีม v1.8 · Q-11 — แฟ้มใหญ่ผนึกโดยหน่วยความจำคงที่ (อ่านต้นทางรอบเดียว · หน่วยความจำ = ขนาดชิ้น)
+      let chunkSize = STREAM_CHUNK_DEFAULT;
+      const after = rest[streamIdx + 1];
+      if (after && /^\d+$/.test(after)) chunkSize = Number(after);
+      const t0 = performance.now();
+      let s;
+      try { s = sealStreamFile(fileArg, out, pub, { chunkSize }); } catch (e) { console.error(C.r('✗ ผนึกสตรีมไม่สำเร็จ: ' + e.message)); process.exit(1); }
+      const ms = (performance.now() - t0).toFixed(1);
+      console.log(C.g(`✓ ผนึกสตรีมสำเร็จ → ${out} (${ms} ms)`));
+      console.log('  ผู้รับ   : ' + C.b(s.recipient.label) + '  (pk sha256 ' + s.recipient.public_key_sha256.slice(0, 16) + '…)');
+      console.log('  ชิ้น     : ' + s.total_chunks + ' ชิ้น × ' + s.chunk_size + ' ไบต์ · เนื้อหา ' + s.total_plaintext + ' ไบต์ → ซอง ' + fs.statSync(out).size + ' ไบต์');
+      console.log('  สายท้าย  : ' + C.b(s.chain_sha256.slice(0, 24) + '…'));
+      console.log(C.dim('  โหนดกลางตรวจสายได้โดยไม่ต้องมีกุญแจ: node cli.js kem check ' + out));
+      console.log(C.dim('  ผู้รับเปิดด้วยกุญแจลับของตัวเอง: node cli.js kem open ' + out));
+      process.exit(0);
+    }
     const plain = fs.readFileSync(fileArg);
     const seal = sealBytes(new Uint8Array(plain), pub);
-    let out = rest.indexOf('--out') > 0 ? rest[rest.indexOf('--out') + 1] : (fileArg + '.seal.json');
     fs.writeFileSync(out, JSON.stringify(seal, null, 2));
     console.log(C.g(`✓ ผนึกแฟ้มสำเร็จ → ${out}`));
     console.log('  ผู้รับ   : ' + C.b(seal.recipient.label) + '  (pk sha256 ' + seal.recipient.public_key_sha256.slice(0, 16) + '…)');
@@ -749,26 +768,12 @@ async function kemNamespace(rest) {
     const sealPath = rest[1] || '';
     if (!sealPath) { console.error(C.r('ใช้งาน: node cli.js kem open <ซอง.seal.json> [--out <path> --force]')); process.exit(1); }
     if (!fs.existsSync(sealPath)) { console.error(C.r('ไม่พบซอง ' + sealPath)); process.exit(1); }
-    const seal = JSON.parse(fs.readFileSync(sealPath, 'utf8'));
-    let passphrase = process.env.SOVEREIGN_KEM_PASS || '';
-    if (!passphrase) passphrase = await readPassphrase('  passphrase กุญแจ KEM: ');
-    let kemVault;
-    try {
-      kemVault = openVault(JSON.parse(fs.readFileSync(KVAULT, 'utf8')), passphrase);
-      if (kemVault.profile !== KEM_PROFILE || !kemVault.sk_b64) throw new Error('vault กุญแจ KEM ไม่ใช่ของระบบนี้');
-    } catch (e) {
-      console.error(C.r('  ✗ ' + e.message));
-      process.exit(1);
-    }
-    const t0 = performance.now();
-    let plain;
-    try {
-      plain = openEnvelope(seal, kemVault.sk_b64);
-    } catch (e) {
-      console.error(C.r('✗ ' + e.message));
-      process.exit(1);
-    }
-    const ms = (performance.now() - t0).toFixed(1);
+    // แยกรูปแบบซองอัตโนมัติ: ซองสตรีม v1.8 ติด format ไว้บรรทัดแรกเสมอ (อ่านเฉพาะหัวแฟ้ม — ไม่ต้องโหลดทั้งก้อน)
+    const sniffFd = fs.openSync(sealPath, 'r');
+    const sniffBuf = Buffer.alloc(2048);
+    const sniffGot = fs.readSync(sniffFd, sniffBuf, 0, 2048);
+    fs.closeSync(sniffFd);
+    const isStream = sniffBuf.subarray(0, Math.max(0, sniffGot)).toString('utf8').includes(STREAM_FORMAT);
     const defaultOut = sealPath.endsWith('.seal.json') ? sealPath.slice(0, -'.seal.json'.length) : sealPath.replace(/\.json$/, '') + '.opened';
     const out = rest.indexOf('--out') > 0 ? rest[rest.indexOf('--out') + 1] : defaultOut;
     const force = rest.includes('--force');
@@ -779,6 +784,41 @@ async function kemNamespace(rest) {
     if (fs.existsSync(out) && out === defaultOut) {
       console.log(C.y('  ⚠ แฟ้มปลายทางอยู่แล้ว (' + out + ') — เขียนทับด้วยเนื้อหาจากซอง'));
     }
+    let passphrase = process.env.SOVEREIGN_KEM_PASS || '';
+    if (!passphrase) passphrase = await readPassphrase('  passphrase กุญแจ KEM: ');
+    let kemVault;
+    try {
+      kemVault = openVault(JSON.parse(fs.readFileSync(KVAULT, 'utf8')), passphrase);
+      if (kemVault.profile !== KEM_PROFILE || !kemVault.sk_b64) throw new Error('vault กุญแจ KEM ไม่ใช่ของระบบนี้');
+    } catch (e) {
+      console.error(C.r('  ✗ ' + e.message));
+      process.exit(1);
+    }
+    if (isStream) {
+      // ซองสตรีม v1.8 · Q-11 — ตรวจสาย hash + ถอดตามลำดับ + เขียนออกแบบสตรีมในรอบเดียว (หน่วยความจำคงที่)
+      const t0 = performance.now();
+      let opened;
+      try { opened = openStreamFile(sealPath, out, kemVault.sk_b64); } catch (e) {
+        console.error(C.r('✗ ' + e.message));
+        process.exit(1);
+      }
+      const ms = (performance.now() - t0).toFixed(1);
+      console.log(C.g(`✓ เปิดซองสตรีมสำเร็จ (${ms} ms) → ${out}`));
+      console.log('  ชิ้น     : ' + opened.chunks + ' ชิ้น · เนื้อหา ' + opened.bytes + ' ไบต์');
+      console.log('  sha256  : ' + C.b(opened.plaintext_sha256.slice(0, 24) + '…') + '  (ตรงที่ประกาศท้ายซอง)');
+      console.log(C.dim('  สาย hash ผูกหัวถึงท้ายครบ — ตัด/ย้าย/แก้ชิ้นใดก็ไม่ผ่านทั้งสาย'));
+      process.exit(0);
+    }
+    const seal = JSON.parse(fs.readFileSync(sealPath, 'utf8'));
+    const t0 = performance.now();
+    let plain;
+    try {
+      plain = openEnvelope(seal, kemVault.sk_b64);
+    } catch (e) {
+      console.error(C.r('✗ ' + e.message));
+      process.exit(1);
+    }
+    const ms = (performance.now() - t0).toFixed(1);
     fs.writeFileSync(out, plain);
     console.log(C.g(`✓ เปิดซองสำเร็จ (${ms} ms) → ${out}`));
     console.log('  ผู้รับตามซอง: ' + C.b(seal.recipient.label) + '  ·  ขนาดเนื้อหา: ' + plain.length + ' ไบต์');
@@ -790,6 +830,53 @@ async function kemNamespace(rest) {
     const sealPath = cRest[1] || '';
     if (!sealPath) { console.error(C.r('ใช้งาน: node cli.js kem check <ซอง.seal.json> [--match <kem-pub.json>]')); process.exit(1); }
     if (!fs.existsSync(sealPath)) { console.error(C.r('ไม่พบซอง ' + sealPath)); process.exit(1); }
+    // แยกรูปแบบซองอัตโนมัติ (อ่านแค่หัวแฟ้มจากดิสก์ — ซองสตรีมติด format บรรทัดแรกเสมอ)
+    const sniffFd = fs.openSync(sealPath, 'r');
+    const sniffBuf = Buffer.alloc(2048);
+    const sniffGot = fs.readSync(sniffFd, sniffBuf, 0, 2048);
+    fs.closeSync(sniffFd);
+    const isStream = sniffBuf.subarray(0, Math.max(0, sniffGot)).toString('utf8').includes(STREAM_FORMAT);
+    if (isStream) {
+      // ซองสตรีม v1.8 · Q-11 — metadata + สาย hash ครบหัวถึงท้าย โดยโหนดขนส่งไม่ต้องมีกุญแจตัวใดเลย
+      let info;
+      try {
+        const h = readStreamHeader(sealPath);
+        info = streamHeaderInfo(h.header, h.total_bytes);
+      } catch (e) { console.error(C.r('✗ ' + e.message)); process.exit(1); }
+      console.log(C.g('เส้นทางซองสตรีม (metadata + สาย hash — ไม่แตะกุญแจลับ ไม่ผ่าน GCM):'));
+      console.log('  อัลกอริทึม: ' + C.b(info.alg) + '  ·  v' + info.version + '  ·  profile: ' + info.profile);
+      console.log('  ผู้รับ    : ' + C.b(info.recipient_label) + '  (pk sha256 ' + info.recipient_sha256.slice(0, 24) + '…)');
+      console.log('  ชิ้น      : ' + info.total_chunks + ' ชิ้น × ' + info.chunk_size + ' ไบต์ · เนื้อหารวม ' + info.total_plaintext + ' ไบต์ · ซอง ' + info.total_bytes + ' ไบต์ · encapsulation ' + info.encapsulated_cipher_bytes + ' ไบต์ (FIPS 203)');
+      console.log('  สร้างเมื่อ: ' + info.created_at);
+      const matchPath = matchArg || (fs.existsSync(KPUB) ? KPUB : null);
+      if (matchPath && fs.existsSync(matchPath)) {
+        try {
+          const localPub = JSON.parse(fs.readFileSync(matchPath, 'utf8'));
+          if (pubSha256(localPub) === info.recipient_sha256) {
+            console.log(C.g('  ✓ ตรงกุญแจเครื่องนี้ (' + matchPath + ' · "' + localPub.label + '") — ซองมาถึงแหล่งที่ถูก: node cli.js kem open ' + sealPath));
+          } else {
+            console.log(C.y('  ✗ ไม่ใช่ปลายทางของเครื่องนี้ (' + matchPath + ' · "' + localPub.label + '") — ผู้รับคือโหนดอื่น เส้นทางแยก'));
+          }
+        } catch (e) {
+          console.error(C.y('  ⚠ แฟ้มเทียบ ' + matchPath + ' ใช้ไม่ได้ (' + e.message.slice(0, 44) + ') — ข้าม'));
+        }
+      }
+      if (info.anomalies.length === 0) {
+        let chain;
+        try { chain = verifyStreamChain(sealPath); } catch (e) {
+          console.error(C.y('  ⚠ ' + e.message));
+          console.error(C.r('สาย hash ไม่ครบ — automation ห้ามส่งต่อ (exit 1)'));
+          process.exit(1);
+        }
+        console.log(C.g('  ✓ สาย hash ครบหัวถึงท้าย (' + chain.total_chunks + ' ชิ้น · ท้ายสาย ' + chain.chain_sha256.slice(0, 16) + '…) — ไม่มีการตัดทอน/ย้ายลำดับระหว่างทาง'));
+        console.log(C.dim('  รูปซองครบตามมาตรฐาน — ส่งเป็นเส้นทางต่อได้; เนื้อหาเปิดได้เฉพาะเจ้าของกุญแจเสมอ'));
+      } else {
+        for (const a of info.anomalies) console.error(C.y('  ⚠ ' + a));
+        console.error(C.r('โครงซองไม่อยู่ในมาตรฐาน — automation ห้ามส่งต่อ (exit 1)'));
+        process.exit(1);
+      }
+      process.exit(0);
+    }
     let envelope;
     try { envelope = JSON.parse(fs.readFileSync(sealPath, 'utf8')); } catch {
       console.error(C.r('แฟ้ม ' + sealPath + ' ไม่ใช่ JSON ที่อ่านได้ — แฟ้มซองเสียหายหรือไม่ใช่ซอง'));
@@ -824,12 +911,12 @@ async function kemNamespace(rest) {
     }
   } else {
     console.log([
-      'คำสั่ง kem (ML-KEM-768 · FIPS 203 — ซองเข้ารหัส + สายส่งมาตรฐาน v1.7):',
+      'คำสั่ง kem (ML-KEM-768 · FIPS 203 — ซองเข้ารหัส + สายส่งมาตรฐาน v1.7 · ซองสตรีม v1.8):',
       '  node cli.js kem keygen "ชื่อผู้รับ"   เกิดกุญแจ KEM (sk → vault เข้ารหัส · pk → data/kem-pub.json)',
       '  node cli.js kem pub                   อ่านแฟ้มกุญแจสาธารณะ (แจกต่อได้)',
-      '  node cli.js kem seal <ไฟล์> --to <kem-pub.json>   ผนึกไฟล์ส่งเจ้าของกุญแจ (ciphertext + encapsulation ตาม FIPS 203)',
-      '  node cli.js kem open <ซอง.seal.json>  เปิดซองด้วยกุญแจลับในเครื่อง (ซองถูกแก้ 1 บิต = ปฏิเสธ)',
-      '  node cli.js kem check <ซอง.seal.json> ตรวจเส้นทางซองจาก metadata ล้วน (ไม่ต้องมีกุญแจ — โหนดขนส่งใช้ได้)',
+      '  node cli.js kem seal <ไฟล์> --to <kem-pub.json> [--stream [ขนาดชิ้นไบต์]]   ผนึกจากกุญแจสาธารณะ (ธง --stream = แฟ้มใหญ่ผนึกโดยหน่วยความจำคงที่ v1.8)',
+      '  node cli.js kem open <ซอง.seal.json>  เปิดซองด้วยกุญแจลับในเครื่อง (ซองถูกแก้ 1 บิต = ปฏิเสธ) — แยกซองเดี่ยว/ซองสตรีมให้เอง',
+      '  node cli.js kem check <ซอง.seal.json> ตรวจเส้นทางจาก metadata ล้วน (ไม่ต้องมีกุญแจ) — ซองสตรีมตรวจสาย hash ครบหัวถึงท้ายด้วย',
       '',
       '  หลัก: ผู้ส่งถือมีแต่กุญแจสาธารณะของผู้รับ — ผู้รับเปิดได้เฉพาะกุญแจลับของตัวเองเท่านั้น',
       '  automation: กำหนด SOVEREIGN_KEM_PASS=... (vault กุญแจ KEM แยกชั้นจาก vault อื่น)',

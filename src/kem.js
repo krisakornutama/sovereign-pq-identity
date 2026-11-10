@@ -11,10 +11,16 @@ export const KEM_PROFILE = 'sovereign.kem768.v1';
 const KEM_DOMAIN = 'sovereign-kem/v1';
 
 // ขนาดตาม FIPS 203 Table 3 (ML-KEM-768) — ใช้ตรวจรูปแบบแฟ้มก่อนถอดเสมอ (หน่วย: ไบต์ / ตัว(Base64))
-const LEN = { publicKey: 1184, secretKey: 2400, cipherText: 1088 };
+export const KEM_LEN = { publicKey: 1184, secretKey: 2400, cipherText: 1088 };
+const LEN = KEM_LEN; // ชื่อเรียกในแฟ้มนี้
 
-function sha256hex(bytes) {
+export function sha256hex(bytes) {
   return createHash('sha256').update(bytes).digest('hex');
+}
+
+// กุญแจ session จาก sharedSecret — เรียกร่วมกันทั้งซองเดี่ยว (v1.6) และซองสตรีม (v1.8) เพื่อโดเมนเดียวกันเสมอ
+export function kemSessionKey(sharedSecret) {
+  return sessionKey(sharedSecret);
 }
 
 function sessionKey(sharedSecret) {
