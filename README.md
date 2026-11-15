@@ -10,7 +10,7 @@
 [![Standard](https://img.shields.io/badge/Standard-FIPS_203_ML--KEM-fbbf24?style=for-the-badge&labelColor=030712)](https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.203.pdf)
 [![Zero Cloud](https://img.shields.io/badge/Cloud-ZERO-34d399?style=for-the-badge&labelColor=030712)](.)
 [![ZK-SNARK](https://img.shields.io/badge/ZK--SNARK-Groth16_BN254-a855f7?style=for-the-badge&labelColor=030712)](#-️-zk-snark-anonymous-proof-v12--พิสูจน์ว่าเป็นสมาชิกโดยไม่บอกว่าใคร)
-[![Tests](https://img.shields.io/badge/Tests-54_passing-22d3ee?style=for-the-badge&labelColor=030712)](#-ผลการทดสอบจากเครื่องจริง)
+[![Tests](https://img.shields.io/badge/Tests-60_passing-22d3ee?style=for-the-badge&labelColor=030712)](#-ผลการทดสอบจากเครื่องจริง)
 [![Node](https://img.shields.io/badge/Node.js-%E2%89%A520-43853d?style=for-the-badge&labelColor=030712)](./package.json)
 
 </div>
@@ -33,7 +33,7 @@ node cli.js keygen "ชื่อเรียกเครื่อง"   # สร
 node cli.js keygen --slh "ชื่อ"        # แบบสามชั้น: เพิ่มลายเซ็น SLH-DSA-128s (FIPS 205) ตั้งแต่เกิดตัวตน
 node cli.js demo        # จำลองขาย → ถอดกุญแจจาก vault → เซ็นตามโปรไฟล์ → ตรวจ → ลงคลัง
 node cli.js selftest    # ทดสอบการบุกรุก 7 เคส (สลิป + vault)
-npm test                # ชุดทดสอบเต็ม 54 เคส (ไม่ใช้เน็ต)
+npm test                # ชุดทดสอบเต็ม 60 เคส (ไม่ใช้เน็ต)
 
 # หมุนเวียนกุญแจ (v1.4) — ตัวตนใหม่แทนชุดเดิม แล้วใบเสร็จเก่ายังตรวจผ่านทุกใบ
 node cli.js rotate --slh           # หมุนครั้งเดียว + อัปเกรดเป็นสามชั้นพร้อมกัน (dual → triple)
@@ -777,6 +777,36 @@ $ node cli.js kem open data/fund-slip-report.jsonl.seal.json
 
 ---
 
+### 🎪 พิธี Groth16 หลายเครื่องจริง (v1.9) — แผ่นสายพิธี hash ผูกหัวถึงท้าย · ตรวจข้ามเครื่องโดยไม่ต้องมีแฟ้ม zkey
+
+v1.5 มีพิธีหลายฝ่ายแต่รันในเครื่องเดียว (สคริปต์ต่อสายเอง) — รุ่น v1.9 ยกระดับเป็นพิธี**ต่างเครื่องจริง** ผ่าน CLI 6 ขั้น `zk ceremony init / challenge / contribute / merge / seal / verify` โดยมี **แผ่นสายพิธี** (`build/ceremony-multiparty/<วงจร>.chain.json`) เป็นแฟ้มเดียวนำทางทั้งสาย: หนึ่งแถวต่อหนึ่งขั้นจริง แต่ละแถวถือ `h_prev` (หัวเดิมของสาย) และถูก hash ด้วย SHA-256 (โดเมน ‖ h_prev ‖ canonical แถว) — **สอดแทรก/ตัดทอน/สลับลำดับ/แก้ชื่อผู้ร่วม = ปลายสายไม่ตรง จับได้ทันที**
+
+กฎของพิธี (คงเดิมจาก v1.5 และเข้มขึ้น):
+- 🔑 **entropy ของผู้ร่วม = `crypto.randomBytes(32)` ในหน่วยความจำ ใช้แล้วทิ้ง** — ห้ามบันทึก/พิมพ์ทุกชนิด; แผ่นพิธีจดได้เฉพาะ **ชื่อผู้ร่วม + sha256 ของทุกแฟ้ม** (ตรวจจริงแล้ว: แฟ้มพิธีสาธารณะไร้ entropy แม้บิตเดียว)
+- 📮 **แฟ้มท้าทาย/บัตร sha256 คู่กันเสมอ** — ผู้ร่วมได้แค่แฟ้มท้าทาย (`*_challenge_N.bin`) ไม่ต้องมีวงจร/ptau/zkey; ส่งกลับมาพร้อมบัตร sha256 → เครื่องโค้งงาน `merge` ตรวจ `--expect-sha` **ก่อน** importBellman (response ไม่ตรงบัตร = ปฏิเสธทันที)
+- ✅ **ซีลได้เฉพาะ "ZKey Ok!"** — `seal` เทียบ sha256 ของ r1cs/pot บนดิสก์กับที่จดตอนเริ่มพิธี แล้ว `verifyFromR1cs` จริง ผ่านค่อยซีล vkey ลง `artifacts/<วงจร>_multiparty_vkey.json` + ประกาศลง `artifacts/ceremony-multiparty.json` (ฝังแผ่นสายเต็ม — เครื่องอื่นตรวจ `zk ceremony verify` ได้เองโดยไม่มีแฟ้ม zkey)
+
+คำสั่งครบสาย 3 เครื่อง (เครื่องโค้งงาน ↔ ผู้ร่วม B):
+
+```bash
+# เครื่องโค้งงานพิธี (base)
+node cli.js zk ceremony init membership_d5 --r1cs build/membership_d5.r1cs --pot build/pot14_final.ptau
+node cli.js zk ceremony challenge build/ceremony-multiparty/membership_d5.chain.json        # → แฟ้มท้าทาย + บัตร sha256
+# เครื่องผู้ร่วม B (รับแค่แฟ้มท้าทาย — ไม่ต้องมีวงจร/กุญแจใด ๆ)
+node cli.js zk ceremony contribute membership_d5_challenge_1.bin response_1.bin --name "ชื่อคุณ"   # → response + บัตร sha256
+# เครื่องโค้งงาน — ตรวจบัตรแล้วรวมเข้าสาย
+node cli.js zk ceremony merge response_1.bin --expect-sha <บัตรจาก B> --name "ชื่อคุณ" --sheet build/ceremony-multiparty/membership_d5.chain.json
+# ต่อสายเพิ่มได้อีก: challenge → ส่งผู้ร่วมถัดไป → merge ซ้ำ · จบพิธีด้วย
+node cli.js zk ceremony seal build/ceremony-multiparty/membership_d5.chain.json
+node cli.js zk ceremony verify artifacts/ceremony-multiparty.json [--files]   # ตรวจได้ทุกเครื่อง ไร้กุญแจ
+```
+
+ผลจากเครื่องจริง:
+- **Sandbox 3 เครื่องจำลอง** (`build/q03-sandbox.mjs` — cwd แยกจริง 3 โฟลเดอร์ · ขนแฟ้มผ่าน copy จริงเท่านั้น): init 6.6 s → challenge 12.2 s (1,889,052 B) → contribute B 2.8 s → merge B 16.5 s → challenge 2 15.9 s → contribute C 3.5 s → merge C 18.1 s → seal **"ZKey Ok!"** 8.3 s + vkey 3,540 B → verify ข้ามเครื่อง (เครื่อง C มีแต่แผ่นพิธี 4,156 B ไร้ zkey) ผ่าน 0.4 s · ทดสอบลบ: แก้ชื่อผู้ร่วมในแผ่น → `h_prev ไม่ตรงหัวก่อนหน้า` จับได้ทันที · **รวม 90.2 s**
+- **พิธีจริงของ repo (จารึกใน artifacts)**: `artifacts/ceremony-multiparty.json` + `artifacts/membership_d5_multiparty_vkey.json` (3,541 B) — สาย 4 แถว (setup → challenge-export → contribute → verify-seal) · head `c2091326662ac055…` · seal ตรวจ `--files` ผ่าน · ผู้ร่วม: sovereign-pq-identity (เครื่องโค้งงาน) — ผู้สนใจต่อสายเพิ่มความเหลือเกินได้ทันทีด้วยขั้น `challenge → contribute → merge` ข้างบน
+
+---
+
 ## ✅ ผลการทดสอบจากเครื่องจริง
 
 ```
@@ -835,8 +865,14 @@ $ npm test
 ✔ kem-stream: รั้งก่อนงาน — ขนาดชิ้นนอกช่วงปฏิเสธ · กุญแจไม่ใช่คู่ของผู้รับในซองปฏิเสธก่อนถอด
 ✔ kem-stream: แฟ้มว่าง 0 ไบต์ — ผนึก/เปิด/ตรวจสายได้ครบ (0 ชิ้น · สายคือหัวล้วน)
 ✔ kem-stream: ครอสฟอร์แมต — เนื้อหาก้อนเดียวกัน ซองเดี่ยว (v1.6) กับซองสตรีม (v1.8) เปิดได้ไบต์ตรงกันเป๊ะ
+✔ ceremony v1.9 (Q-03): แผ่นสายพิธีตามกฎเป๊ะ — หัวครบ field · จด sha256 แฟ้มจริง · สายว่าง = head จุดเริ่ม
+✔ ceremony v1.9 (Q-03): เติมแถวผูกหน้าหลังเป็นสายยาว — h_prev ผูกหัวเดิม · head ย้ายปลายสาย · ตรวจผ่านทุกขั้น
+✔ ceremony v1.9 (Q-03): โจมตีจับได้ทุกชนิด — แก้ hash แถวกลาง / ตัดแถวท้าย / สลับลำดับแถว
+✔ ceremony v1.9 (Q-03): เข้มเขียนแถว — ชนิดผิด / ไม่มีชื่อผู้ร่วม / hash รูปผิด = ปฏิเสธตั้งแต่เขียน
+✔ ceremony v1.9 (Q-03): --files เทียบแฟ้มจริง — แฟ้มถูกแก้ 1 ไบต์ = ตรวจพบ · แฟ้มหายจากดิสก์ = พังชัด
+✔ ceremony v1.9 (Q-03): บัตรแลกแฟ้มระหว่างเครื่อง — sha256 ตรงเป๊ะผ่าน · แฟ้ม/บัตรไม่ตรงปฏิเสธ
 
-ℹ tests 54 · pass 54 · fail 0 · duration ~132 s — กินเวลาราว 2 นาทีเพราะเทสเซ็นชั้น SLH-DSA จริง (~22 วิ/ลายเซ็น) ตามข้อจำกัดที่ประกาศไว้
+ℹ tests 60 · pass 60 · fail 0 · duration ~139 s — กินเวลาราว 2 นาทีเพราะเทสเซ็นชั้น SLH-DSA จริง (~22 วิ/ลายเซ็น) ตามข้อจำกัดที่ประกาศไว้
 ```
 
 ```
@@ -877,6 +913,7 @@ repo นี้คือ**ชั้นตรวจสอบอัตลักษ�
 | ✅ **v1.6 — บังเกตุจากเครื่องจริง** | **ML-KEM (FIPS 203) — ซองเข้ารหัสแฟ้มระหว่างโหนด** — `src/kem.js` (ML-KEM-768 + AES-256-GCM · กุญแจ session = SHA-256("sovereign-kem/v1" ‖ sharedSecret)) · CLI `kem keygen/pub/seal/open` · vault แยก `data/kem.vault.json` (env `SOVEREIGN_KEM_PASS`) · ผูกผู้รับด้วย `public_key_sha256` (ไม่ขน pk ในซอง) · ซองถูกแก้ 1 ตำแหน่ง = ปฏิเสธ · 6/6 ทดสอบ · ซอง 1 KiB → 3,206 B (ส่วนหัวตายตัว 1,835 B) · seal/open 1 KiB ~1.8/1.4 ms | พร้อมใช้ |
 | ✅ **v1.7 — บังเกตุจากเครื่องจริง** | **สายส่งข้อมูลลับมาตรฐานระหว่างโหนด** — `--seal-to <kem-pub.json>` บน `zk prove` / `zk prove-bal` (พิสูจน์แล้วผนึกต่อในคำสั่งเดียว — ผู้ส่งไม่ถือกุญแจลับ KEM) · `kem check <ซอง.seal.json> [--match]` ตรวจเส้นทางจาก metadata ล้วน (โหนดขนส่งไม่ต้องมีกุญแจ · โครงผิดมาตรฐาน FIPS 203 = exit 1 ห้าม automation ส่งต่อ) · sandbox 2 โหนดครบสาย: prove-bal → seal → check → open → verify-bal ผ่าน · 48/48 ทดสอบ | พร้อมใช้ |
 | ✅ **v1.8 — บังเกตุจากเครื่องจริง** | **ซองสตรีมแบ่งส่วน (chunked envelope)** — `kem seal <ไฟล์> --stream [ขนาดชิ้น]` อ่านต้นทางรอบเดียว หน่วยความจำ = ขนาดชิ้น (64 KiB ค่าเริ่มต้น · ยอมรับ 256 B–4 MiB) · ซอง JSONL หัว/ชิ้น/ท้าย · สาย hash ผูกหัวถึงท้าย (โหนดขนส่งตรวจครบโดยไม่มีกุญแจ) · GCM AAD ผูกผู้รับ+ปริมาตรรวม+ดัชนี (ย้าย/สลับชิ้น = ปฏิเสธ) · เปิดแล้วเขียน atomic (`.part` → fsync → rename) · sandbox สลิป 64,000 บรรทัด 13,763,390 B → 53 ชิ้น: seal 278.9 ms / open 341.2 ms · sha256 ตรงต้นทางเป๊ะทุกไบต์ · 54/54 ทดสอบ | พร้อมใช้ |
+| ✅ **v1.9 — บังเกตุจากเครื่องจริง** | **พิธี Groth16 หลายเครื่องจริง (multi-party ceremony chain)** — CLI `zk ceremony init/challenge/contribute/merge/seal/verify` · แผ่นสายพิธี hash ผูกหัวถึงท้าย (`h_prev` + canonical — สอดแทรก/ตัดทอน/สลับ/แก้ชื่อ = จับได้) · ผู้ร่วมได้แค่แฟ้มท้าทาย (ไม่ต้องมีวงจร/กุญแจ) · merge ตรวจบัตร `--expect-sha` ก่อน import · seal เฉพาะ "ZKey Ok!" + ประกาศ `artifacts/ceremony-multiparty.json` (ฝังสายเต็ม — ตรวจข้ามเครื่องไร้แฟ้ม zkey) · entropy สุ่มในหน่วยความจำห้ามบันทึก · sandbox 3 เครื่องผ่านครบ 90.2 s · 60/60 ทดสอบ | พร้อมใช้ |
 | 🧩 **เฟสถัดไป** | Falcon (FIPS 206 / FN-DSA) เมื่อ finalize — คงพับตามนโยบาย "หยิบที่จบมาใช้ก่อน" (NIST ยืนยัน 27 ต.ค. 2026: FIPS 206 ยังเป็น "selected for ongoing standardization") | วางแผน |
 
 ---

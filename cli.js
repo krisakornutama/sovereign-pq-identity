@@ -8,12 +8,16 @@ import { signReceipt, verifyReceipt } from './src/receipt.js';
 import { appendReceipt, listReceipts } from './src/ledger.js';
 import { createVault, openVault, vaultSummary } from './src/vault.js';
 import { readPassphrase, passphraseFromEnv } from './src/password.js';
-import { canonical } from './src/util.js';
+import { canonical, sha256Hex } from './src/util.js';
 import { loadPoseidon, buildTree, pathFor, newMemberSecret, MAX_MEMBERS, MERKLE_DEPTH, DEEP_DEPTH, capacityFromRootFile, depthFromRootFile } from './src/merkle.js';
 import { proveMembership, verifyMembership, anonReceipt, loadNullifierLedger, isNullifierSpent, appendNullifier, artifactsReady, artifactsReadyDeep, proveBalance, verifyBalance, balanceReceipt, artifactsReadyBalance, artifactsReadyBalanceDeep, CIRCUIT } from './src/zk.js';
 import { kemKeygen, kemPublicFile, sealBytes, openEnvelope, envelopePublicInfo, pubSha256, KEM_PROFILE } from './src/kem.js';
 import { sealStreamFile, openStreamFile, readStreamHeader, streamHeaderInfo, verifyStreamChain, STREAM_CHUNK_DEFAULT, STREAM_FORMAT } from './src/kem-stream.js';
+import { newCeremonySheet, appendCeremonyRow, verifyCeremonyChain, responseShaMatches, CEREMONY_FORMAT } from './src/ceremony.js';
+import { createRequire } from 'node:module';
 import { randomBytes } from 'node:crypto';
+
+const requireNode = createRequire(import.meta.url); // snarkjs โหลดเฉพาะเมื่อคำสั่งพิธีต้องถอด (คำสั่งตรวจสายไม่แตะ)
 
 const IDENT = 'data/identity.json';
 const VAULT = 'data/identity.vault.json';
@@ -664,6 +668,205 @@ async function zkNamespace(rest) {
     console.log('  nullifier : ' + rec.publicSignals.nullifierHash.slice(0, 18) + '…  → บันทึกกันซ้ำแล้ว (' + ledger.length + ' รายการ)');
     console.log(C.dim('  margin: ใบเดียวกันรอบเดียวกันใช้ซ้ำไม่ได้ — และผู้ตรวจตรวจได้โดยไม่ถือแฟ้มคลังใบยอดเลย'));
     process.exit(0);
+  } else if (sub === 'ceremony') {
+    // พิธี Groth16 หลายเครื่องจริง (v1.9 · Q-03) — สายพิธีผูก hash หัวถึงท้าย · entropy สุ่มในหน่วยความจำห้ามบันทึก
+    // เครื่องโค้งงานพิธี (base): init → challenge → merge ซ้ำ → seal · เครื่องผู้ร่วม: contribute (ได้แฟ้ม challenge มาแต่ตัวเดียว)
+    // แฟ้มขนระหว่างเครื่องผ่านแฟ้มจริงเท่านั้น (challenge/response) + บัตร sha256 กันแฟ้มเพี้ยนระหว่างทาง (--expect-sha ที่ merge)
+    const csub = rest[1] || 'help';
+    const CWORK = 'build/ceremony-multiparty'; // งานที่อยู่กับเครื่องโค้งงาน — build/ นอก git ทั้งชั้น
+    const shaF = (f) => sha256Hex(fs.readFileSync(f));
+    const logg = { info: (m) => console.log('   ·', m), error: (m) => console.error('   !', m), warn: (m) => console.warn('   …', m), debug: () => {} };
+    const bigintReplacer = (_k, v) => (typeof v === 'bigint' ? v.toString() : v);
+    const MANIFEST = 'artifacts/ceremony-multiparty.json';
+
+    const loadSheet = (sheetPath) => {
+      if (!fs.existsSync(sheetPath)) { console.error(C.r('ไม่พบแผ่นสายพิธี ' + sheetPath)); process.exit(1); }
+      const sheet = JSON.parse(fs.readFileSync(sheetPath, 'utf8'));
+      const v = verifyCeremonyChain(sheet);
+      if (!v.ok) { console.error(C.r('✗ แผ่นสายพิธีพัง (ปฏิเสธทำงานต่อ): ' + v.problems.join(' · '))); process.exit(1); }
+      return sheet;
+    };
+    const saveSheet = (sheetPath, sheet) => {
+      fs.mkdirSync(path.dirname(sheetPath), { recursive: true });
+      fs.writeFileSync(sheetPath, JSON.stringify(sheet, bigintReplacer, 2) + '\n');
+      return sheetPath;
+    };
+    const sheetPathOf = (circuit) => path.join(CWORK, circuit + '.chain.json');
+    // ขั้น challenge/merge/seal ต้องแตะแฟ้ม zkey ทำงาน — มีอยู่บนเครื่องโค้งงานพิธีเท่านั้น (เครื่องผู้ร่วมมีแต่แฟ้มท้าทาย)
+    const needWorkZkey = (sheet) => {
+      if (!sheet.work_zkey || !fs.existsSync(sheet.work_zkey)) {
+        console.error(C.r('แผ่นพิธีนี้ไม่มีแฟ้ม zkey ทำงานบนเครื่องนี้ (work_zkey: ' + String(sheet.work_zkey) + ') — ขั้นนี้รันบนเครื่องโค้งงานพิธีเท่านั้น'));
+        process.exit(1);
+      }
+    };
+
+    if (csub === 'init') {
+      const circuit = rest[2];
+      const r1cs = extractFlag(rest, '--r1cs').value;
+      const pot = extractFlag(rest, '--pot').value;
+      if (!circuit || !r1cs || !pot) { console.error(C.r('ใช้งาน: node cli.js zk ceremony init <วงจร> --r1cs <แฟ้ม.r1cs> --pot <แฟ้ม.ptau> [--profile <โปรไฟล์>]')); process.exit(1); }
+      if (!fs.existsSync(r1cs)) { console.error(C.r('ไม่พบแฟ้ม ' + r1cs)); process.exit(1); }
+      if (!fs.existsSync(pot)) { console.error(C.r('ไม่พบแฟ้ม ' + pot)); process.exit(1); }
+      const sheetPath = sheetPathOf(circuit);
+      if (fs.existsSync(sheetPath)) { console.error(C.r('มีแผ่นสายพิธีอยู่แล้ว ' + sheetPath + ' — พิธีเดิมยังไม่ซีล (เพิ่มความเหลือเกินด้วย challenge/contribute/merge ต่อ หรือซีลด้วย seal)')); process.exit(1); }
+      const snarkjs = requireNode('snarkjs');
+      // snarkjs ไม่ export './package.json' — หาจากพาธ entry จริง (build/main.cjs → ../package.json)
+      const snarkjsPkg = path.join(path.dirname(requireNode.resolve('snarkjs')), '..', 'package.json');
+      const tool = 'snarkjs ' + JSON.parse(fs.readFileSync(snarkjsPkg, 'utf8')).version;
+      const zkey0 = path.join(CWORK, circuit + '_0000.zkey');
+      fs.mkdirSync(CWORK, { recursive: true });
+      console.log('🎪 พิธี Groth16 หลายเครื่อง — วงจร ' + circuit + ' · ฐาน pot: ' + path.basename(pot));
+      const t0 = performance.now();
+      await snarkjs.zKey.newZKey(r1cs, pot, zkey0, logg);
+      const seconds = Number(((performance.now() - t0) / 1000).toFixed(1));
+      const sheet = newCeremonySheet({ circuit, profile: extractFlag(rest, '--profile').value || null, r1csFile: r1cs, potFile: pot, potPowers: 14, tool });
+      const ap = appendCeremonyRow(sheet, { step: 'setup', contributor: 'base (จาก ' + path.basename(pot) + ')', file: zkey0, zkey_sha256: shaF(zkey0), seconds });
+      sheet.work_zkey = zkey0;
+      saveSheet(sheetPath, sheet);
+      console.log(C.g('✓ โครง zkey ฐานพร้อม (' + seconds + ' s) — sha256: ' + ap.row.zkey_sha256.slice(0, 16) + '…'));
+      console.log('  แผ่นสายพิธี: ' + C.b(sheetPath) + '  ·  head: ' + C.b(sheet.head.slice(0, 16) + '…'));
+      console.log(C.dim('  ขั้นถัดไป: node cli.js zk ceremony challenge ' + sheetPath + ' — แล้วส่งแฟ้ม challenge ให้ผู้ร่วมพร้อมบัตร sha256'));
+      process.exit(0);
+    } else if (csub === 'challenge') {
+      const sheetPath = rest[2];
+      if (!sheetPath) { console.error(C.r('ใช้งาน: node cli.js zk ceremony challenge <แผ่นสายพิธี.chain.json>')); process.exit(1); }
+      const sheet = loadSheet(sheetPath);
+      needWorkZkey(sheet);
+      const snarkjs = requireNode('snarkjs');
+      const n = sheet.chain.filter((r) => r.step === 'challenge-export').length + 1;
+      const ch = path.join(path.dirname(sheet.work_zkey), sheet.circuit + '_challenge_' + n + '.bin');
+      const t0 = performance.now();
+      await snarkjs.zKey.exportBellman(sheet.work_zkey, ch, logg);
+      const seconds = Number(((performance.now() - t0) / 1000).toFixed(1));
+      const chSha = shaF(ch);
+      appendCeremonyRow(sheet, { step: 'challenge-export', contributor: 'โค้งงานพิธี (export)', contribution_sha256: chSha, file: ch, seconds });
+      saveSheet(sheetPath, sheet);
+      console.log(C.g('✓ แฟ้มท้าทายพร้อม → ' + ch + ' (' + fs.statSync(ch).size.toLocaleString('en-US') + ' ไบต์ · ' + seconds + ' s)'));
+      console.log('  บัตร sha256: ' + C.b(chSha));
+      console.log(C.y('  ✍ ส่ง 2 อย่างให้ผู้ร่วมคนถัดไป: (1) แฟ้มท้าทายนี้ (2) บัตร sha256 บรรทัดบน — เขารัน: node cli.js zk ceremony contribute <แฟ้มท้าทาย> <response-ออก> --name "ชื่อคุณ"'));
+      process.exit(0);
+    } else if (csub === 'contribute') {
+      // เครื่องผู้ร่วม — มีแต่แฟ้มท้าทาย (ไม่ต้องมี zkey/r1cs/ptau/vault อะไรเลย)
+      const challenge = rest[2];
+      const out = rest[3];
+      const name = extractFlag(rest, '--name').value;
+      if (!challenge || !out || !name) { console.error(C.r('ใช้งาน: node cli.js zk ceremony contribute <แฟ้มท้าทาย.bin> <response-ออก.bin> --name "ชื่อคุณ"')); process.exit(1); }
+      if (!fs.existsSync(challenge)) { console.error(C.r('ไม่พบแฟ้มท้าทาย ' + challenge)); process.exit(1); }
+      const entropy = randomBytes(32).toString('hex'); // อยู่ในหน่วยความจำเท่านั้น — ใช้แล้วหาย (แฟ้มพิธีจดเฉพาะชื่อ + sha256)
+      const snarkjs = requireNode('snarkjs');
+      let curve = null;
+      const t0 = performance.now();
+      try {
+        curve = await snarkjs.curves.getCurveFromName('bn254');
+        await snarkjs.zKey.bellmanContribute(curve, challenge, out, entropy, logg);
+      } finally {
+        if (curve && curve.terminate) await curve.terminate();
+      }
+      const seconds = Number(((performance.now() - t0) / 1000).toFixed(1));
+      const rspSha = shaF(out);
+      console.log(C.g('✓ ร่วมพิธีสำเร็จ ["' + name + '"] (' + seconds + ' s) → ' + out + ' (' + fs.statSync(out).size.toLocaleString('en-US') + ' ไบต์)'));
+      console.log('  บัตร sha256: ' + C.b(rspSha));
+      console.log(C.y('  ✍ ส่งกลับเครื่องโค้งงาน 3 อย่าง: (1) แฟ้ม response (2) บัตร sha256 บรรทัดบน (3) ชื่อ "' + name + '" — เขา merge ด้วย: node cli.js zk ceremony merge <response> --expect-sha <บัตร> --name "' + name + '"'));
+      console.log(C.dim('  entropy ที่ใช้ไม่มีทางจดบันทึกที่ใด — แฟ้มพิธีจดชื่อคุณกับ sha256 ของแฟ้มเท่านั้น'));
+      process.exit(0);
+    } else if (csub === 'merge') {
+      const rsp = rest[2];
+      const expectSha = extractFlag(rest, '--expect-sha').value;
+      const name = extractFlag(rest, '--name').value;
+      const sheetPath = extractFlag(rest, '--sheet').value || null;
+      if (!rsp || !expectSha || !name || !sheetPath) { console.error(C.r('ใช้งาน: node cli.js zk ceremony merge <response.bin> --expect-sha <sha256 จากผู้ร่วม> --name "ชื่อ" --sheet <แผ่นสายพิธี>')); process.exit(1); }
+      const sheet = loadSheet(sheetPath);
+      needWorkZkey(sheet);
+      const m = responseShaMatches(rsp, expectSha);
+      if (!m.ok) { console.error(C.r('✗ แฟ้ม response ไม่ตรงบัตร: ' + m.reason)); process.exit(1); }
+      const snarkjs = requireNode('snarkjs');
+      const n = sheet.chain.filter((r) => r.step === 'contribute').length + 1;
+      const zkeyNext = path.join(path.dirname(sheet.work_zkey), sheet.circuit + '_' + String(n).padStart(4, '0') + '.zkey');
+      const t0 = performance.now();
+      const okImport = await snarkjs.zKey.importBellman(sheet.work_zkey, rsp, zkeyNext, name, logg);
+      if (!okImport) { console.error(C.r('✗ import ไม่ผ่าน — response ไม่สอดคล้องกับ challenge ที่ออกไป (หยุดพิธี ตรวจเส้นทางแฟ้ม)')); process.exit(1); }
+      const seconds = Number(((performance.now() - t0) / 1000).toFixed(1));
+      appendCeremonyRow(sheet, { step: 'contribute', contributor: name, contribution_sha256: m.sha, file: zkeyNext, zkey_sha256: shaF(zkeyNext), seconds });
+      sheet.work_zkey = zkeyNext;
+      saveSheet(sheetPath, sheet);
+      console.log(C.g('✓ รวม contribution ฝ่าย "' + name + '" แล้ว (' + seconds + ' s) → ' + zkeyNext));
+      console.log('  สายพิธี: ' + sheet.chain.length + ' แถว · head: ' + C.b(sheet.head.slice(0, 16) + '…'));
+      console.log(C.dim('  ต่อสายเพิ่มได้อีก: challenge → ส่งผู้ร่วมถัดไป → merge ซ้ำ · หรือซีลด้วย: zk ceremony seal'));
+      process.exit(0);
+    } else if (csub === 'seal') {
+      const sheetPath = rest[2];
+      if (!sheetPath) { console.error(C.r('ใช้งาน: node cli.js zk ceremony seal <แผ่นสายพิธี>')); process.exit(1); }
+      const sheet = loadSheet(sheetPath);
+      needWorkZkey(sheet);
+      for (const [basen, f] of [['r1cs', sheet.r1cs_file], ['pot', sheet.pot_file]]) {
+        if (!f || !fs.existsSync(f)) { console.error(C.r('ไม่พบแฟ้ม ' + basen + ' (' + String(f) + ') บนเครื่องนี้ — ขั้นซีลต้องมีวงจรและฐาน pot ตามที่จดตอนเริ่มพิธี')); process.exit(1); }
+      }
+      if (sheet.r1cs_sha256 !== shaF(sheet.r1cs_file)) { console.error(C.r('✗ แฟ้ม r1cs บนดิสก์ไม่ตรง hash ที่จดตอนเริ่มพิธี — หยุด (รายการถูกเปลี่ยนระหว่างพิธี)')); process.exit(1); }
+      if (sheet.pot_sha256 !== shaF(sheet.pot_file)) { console.error(C.r('✗ แฟ้ม pot บนดิสก์ไม่ตรง hash ที่จดตอนเริ่มพิธี — หยุด')); process.exit(1); }
+      const snarkjs = requireNode('snarkjs');
+      console.log('🎪 ตรวจสายพิธีกับวงจร + ฐาน pot …');
+      const t0 = performance.now();
+      const ok = await snarkjs.zKey.verifyFromR1cs(sheet.r1cs_file, sheet.pot_file, sheet.work_zkey, logg);
+      if (!ok) { console.error(C.r('✗ zkey verify ไม่ผ่าน — สายพิธีพัง ห้ามซีล (หยุด ตรวจแฟ้มทุกตัวในสาย)')); process.exit(1); }
+      const seconds = Number(((performance.now() - t0) / 1000).toFixed(1));
+      console.log(C.g('✓ ZKey Ok! (' + seconds + ' s) — สายพิธีเที่ยงตามวงจรและฐาน pot'));
+      const vkOut = 'artifacts/' + sheet.circuit + '_multiparty_vkey.json';
+      const vk = await snarkjs.zKey.exportVerificationKey(sheet.work_zkey, logg);
+      fs.mkdirSync('artifacts', { recursive: true });
+      fs.writeFileSync(vkOut, JSON.stringify(vk, bigintReplacer, 2));
+      const finalSha = shaF(sheet.work_zkey);
+      appendCeremonyRow(sheet, { step: 'verify-seal', contributor: 'โค้งงานพิธี (ตรวจและซีล)', zkey_sha256: finalSha, vkey_sha256: shaF(vkOut), seconds });
+      sheet.sealed_at = new Date().toISOString();
+      sheet.final_zkey_sha256 = finalSha;
+      sheet.vkey = { file: vkOut, sha256: shaF(vkOut), bytes: fs.statSync(vkOut).size };
+      saveSheet(sheetPath, sheet);
+      // ประกาศผลของจริงในแฟ้มพิธีสาธารณะ (เข้า repo — ฝังแผ่นสายพิธีเต็ม: ชื่อผู้ร่วม + sha256 ทุกขั้น ล้วนไร้ของลับ)
+      // → verify ใช้ได้ทั้ง sheet และ manifest ข้ามเครื่องโดยไม่ต้องมีแฟ้ม zkey จริง
+      const participants = sheet.chain.filter((r) => r.step === 'contribute').map((r) => r.contributor);
+      let manifest = { format: 'sovereign.ceremony-multiparty.v1', created_at: new Date().toISOString(), circuits: [] };
+      if (fs.existsSync(MANIFEST)) { try { manifest = JSON.parse(fs.readFileSync(MANIFEST, 'utf8')); } catch { /* แฟ้มพัง — สร้างใหม่ */ } }
+      if (!manifest.circuits || !Array.isArray(manifest.circuits)) manifest.circuits = [];
+      manifest.created_at = new Date().toISOString();
+      const idx = manifest.circuits.findIndex((c) => c.circuit === sheet.circuit);
+      if (idx >= 0) manifest.circuits[idx] = sheet; else manifest.circuits.push(sheet);
+      fs.writeFileSync(MANIFEST, JSON.stringify(manifest, bigintReplacer, 2) + '\n');
+      console.log(C.g('✓ ซีลพิธีสำเร็จ — ' + MANIFEST + ' · vkey: ' + vkOut + ' (' + fs.statSync(vkOut).size.toLocaleString('en-US') + ' B)'));
+      console.log('  ผู้ร่วม: ' + (participants.length ? participants.join(' · ') : '(ไม่มี — พิธีฐานล้วน)'));
+      console.log(C.dim('  ตรวจสายเองได้ภายหลัง: node cli.js zk ceremony verify ' + MANIFEST + '  (บนเครื่องฐานเติม --files เทียบแฟ้มจริงด้วย)'));
+      process.exit(0);
+    } else if (csub === 'verify') {
+      const file = rest[2];
+      if (!file) { console.error(C.r('ใช้งาน: node cli.js zk ceremony verify <แผ่นสายพิธี|ceremony-multiparty.json> [--files]')); process.exit(1); }
+      const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+      const sheets = data.format === CEREMONY_FORMAT ? [data] : (data.circuits || []);
+      if (!sheets.length) { console.error(C.r('แฟ้มไม่ใช่แผ่นสายพิธี (รูปของระบบนี้)')); process.exit(1); }
+      const files = rest.includes('--files');
+      let allOk = true;
+      for (const sheet of sheets) {
+        const v = verifyCeremonyChain(sheet, { files });
+        console.log((v.ok ? C.g('✓') : C.r('✗')) + ' วงจร ' + C.b(sheet.circuit) + ' — สาย ' + v.rows + ' แถว · head ' + (v.head ? v.head.slice(0, 16) + '…' : '(ไม่มี)'));
+        for (const p of v.problems) console.error(C.r('    · ' + p));
+        if (files) console.log(C.dim('    (--files เทียบแฟ้ม zkey ที่แถว setup อ้าง บนดิสก์เครื่องนี้)'));
+        if (!v.ok) allOk = false;
+      }
+      if (!allOk) process.exit(1);
+      console.log(C.g('✓ แฟ้มพิธีตรงสายทุกแถว — ชื่อผู้ร่วม + hash ทุกขั้นตรงกันทั้งสาย (ตัดทอน/สลับลำดับ/แก้ชื่อ = จับได้)'));
+      process.exit(0);
+    } else {
+      console.log([
+        'คำสั่ง zk ceremony — พิธี Groth16 หลายเครื่องจริง (v1.9 · Q-03):',
+        '  เครื่องโค้งงานพิธี:',
+        '  node cli.js zk ceremony init <วงจร> --r1cs <แฟ้ม.r1cs> --pot <แฟ้ม.ptau>   โครง zkey ฐาน + แผ่นสายพิธี (build/ceremony-multiparty/)',
+        '  node cli.js zk ceremony challenge <แผ่น>          ออกแฟ้มท้าทายให้ผู้ร่วมคนถัดไป (พร้อมบัตร sha256)',
+        '  node cli.js zk ceremony merge <response.bin> --expect-sha <บัตร> --name "ชื่อ" --sheet <แผ่น>   ตรวจบัตรแล้วรวมเข้าสาย',
+        '  node cli.js zk ceremony seal <แผ่น>               ตรวจสายกับวงจร+pot ("ZKey Ok!") · ซีล vkey ลง artifacts/ + แฟ้มพิธีสาธารณะ',
+        '  node cli.js zk ceremony verify <แฟ้มพิธี> [--files] ตรวจสาย hash หัวถึงท้าย (ไร้กุญแจ · --files เทียบแฟ้ม zkey บนดิสก์ด้วย)',
+        '  เครื่องผู้ร่วม (มีแต่แฟ้มท้าทาย — ไม่ต้องมีวงจร/กุญแจ):',
+        '  node cli.js zk ceremony contribute <แฟ้มท้าทาย> <response-ออก> --name "ชื่อคุณ"   ร่วมพิธี (entropy สุ่มในหน่วยความจำ ใช้แล้วทิ้ง)',
+        '  แฟ้มพิธีจดได้เฉพาะ "ชื่อผู้ร่วม + sha256 ทุกแฟ้ม" — entropy ทางใดไม่ถูกบันทึกเป็นครั้งที่สอง',
+      ].join('\n'));
+      process.exit(0);
+    }
   } else {
     console.log([
       'คำสั่ง zk (ZK-SNARK) — รองรับ 2 โปรไฟล์: ฐาน D=4 (16 ช่อง) / ลึก D=5 (32 ช่อง, v1.5):',

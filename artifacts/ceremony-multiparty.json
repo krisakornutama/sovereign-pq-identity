@@ -1,0 +1,69 @@
+{
+  "format": "sovereign.ceremony-multiparty.v1",
+  "created_at": "2026-11-15T12:49:11.685Z",
+  "circuits": [
+    {
+      "format": "sovereign.ceremony-chain.v1",
+      "version": 1,
+      "circuit": "membership_d5",
+      "profile": "membership_d5_v1",
+      "curve": "bn254",
+      "tool": "snarkjs 0.7.6",
+      "created_at": "2026-11-15T12:47:51.828Z",
+      "r1cs_file": "build/membership_d5.r1cs",
+      "r1cs_sha256": "4e227c939e014537092747bc05aa00a439eac7d9e3d8539c53e97854c53a69cb",
+      "pot_file": "build/pot14_final.ptau",
+      "pot_powers": 14,
+      "pot_sha256": "968717271c8fb8b7f411c97ebc7a92efe033f0db18affa4c410fec6e4b1e493f",
+      "entropy_policy": "entropy ของทุกผู้ร่วมสุ่มจาก node:crypto.randomBytes ในหน่วยความจำและใช้แล้วทิ้งทันที — แฟ้มพิธีจดเฉพาะชื่อผู้ร่วมและ sha256 ห้ามบันทึก entropy ทางใด",
+      "work_zkey": "build\\ceremony-multiparty\\membership_d5_0001.zkey",
+      "chain": [
+        {
+          "h_prev": "0000000000000000000000000000000000000000000000000000000000000000",
+          "step": "setup",
+          "contributor": "base (จาก pot14_final.ptau)",
+          "file": "build\\ceremony-multiparty\\membership_d5_0000.zkey",
+          "zkey_sha256": "5a38a8e5eb8c80914c2fcf3315ad2c575193e85bcf1af5e2b21745dc4a2ea7f3",
+          "seconds": 6.9,
+          "ts": "2026-11-15T12:47:51.934Z"
+        },
+        {
+          "h_prev": "ae8ba2f59a6526d9324ea4f9683f1addeba54bc18cfb8196b99c0827f8730d97",
+          "step": "challenge-export",
+          "contributor": "โค้งงานพิธี (export)",
+          "contribution_sha256": "eaad47606ae8117043bb6162968f1336f9fcee583748405beaaef513931b95a3",
+          "file": "build\\ceremony-multiparty\\membership_d5_challenge_1.bin",
+          "seconds": 14.7,
+          "ts": "2026-11-15T12:48:13.853Z"
+        },
+        {
+          "h_prev": "140bb005132ca53663e35759ba2983b3bbe2d95490fb715ba1449bc48f284151",
+          "step": "contribute",
+          "contributor": "sovereign-pq-identity (เครื่องโค้งงาน)",
+          "contribution_sha256": "c3876c15025a5de2cca09ec7fdc941ea9bda6b60a70983b19775d2e7c751e3ce",
+          "file": "build\\ceremony-multiparty\\membership_d5_0001.zkey",
+          "zkey_sha256": "a1be58a2df0c5b4733ac9cb0e40c89c46cf9b36934ae46e98566d9210917fa64",
+          "seconds": 19,
+          "ts": "2026-11-15T12:48:51.819Z"
+        },
+        {
+          "h_prev": "54b2b39692ee1bc7fb674a87a8908ca35209981f3a05f18c92378ea36988590f",
+          "step": "verify-seal",
+          "contributor": "โค้งงานพิธี (ตรวจและซีล)",
+          "zkey_sha256": "a1be58a2df0c5b4733ac9cb0e40c89c46cf9b36934ae46e98566d9210917fa64",
+          "vkey_sha256": "868c7d8d3f0c1c5eab0c7ee5c18aa22b82ef594b4f3c91a18baca8896df55e95",
+          "seconds": 7.3,
+          "ts": "2026-11-15T12:49:11.682Z"
+        }
+      ],
+      "head": "c2091326662ac0550ccbf2f30bcf31762c6c089278f9f4a84786831dcffbef3b",
+      "sealed_at": "2026-11-15T12:49:11.683Z",
+      "final_zkey_sha256": "a1be58a2df0c5b4733ac9cb0e40c89c46cf9b36934ae46e98566d9210917fa64",
+      "vkey": {
+        "file": "artifacts/membership_d5_multiparty_vkey.json",
+        "sha256": "868c7d8d3f0c1c5eab0c7ee5c18aa22b82ef594b4f3c91a18baca8896df55e95",
+        "bytes": 3541
+      }
+    }
+  ]
+}
