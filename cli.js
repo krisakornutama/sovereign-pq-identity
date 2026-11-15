@@ -10,8 +10,8 @@ import { buildAccountingExport, verifyAccountingExport, verifyAccountingSignatur
 import { createVault, openVault, vaultSummary } from './src/vault.js';
 import { readPassphrase, passphraseFromEnv } from './src/password.js';
 import { canonical, sha256Hex } from './src/util.js';
-import { loadPoseidon, buildTree, pathFor, newMemberSecret, MAX_MEMBERS, MERKLE_DEPTH, DEEP_DEPTH, capacityFromRootFile, depthFromRootFile } from './src/merkle.js';
-import { proveMembership, verifyMembership, anonReceipt, loadNullifierLedger, isNullifierSpent, appendNullifier, artifactsReady, artifactsReadyDeep, proveBalance, verifyBalance, balanceReceipt, artifactsReadyBalance, artifactsReadyBalanceDeep, CIRCUIT } from './src/zk.js';
+import { loadPoseidon, buildTree, pathFor, newMemberSecret, MERKLE_DEPTH, DEEP_DEPTH, capacityFromRootFile, depthFromRootFile } from './src/merkle.js';
+import { proveMembership, verifyMembership, anonReceipt, loadNullifierLedger, isNullifierSpent, appendNullifier, proveBalance, verifyBalance, balanceReceipt, membershipArtifactsFor, balanceArtifactsFor, artifactsReadyFor, circuitNameFor, parseCircuitName, vkeyPathForCircuit } from './src/zk.js';
 import { kemKeygen, kemPublicFile, sealBytes, openEnvelope, envelopePublicInfo, pubSha256, KEM_PROFILE } from './src/kem.js';
 import { sealStreamFile, openStreamFile, readStreamHeader, streamHeaderInfo, verifyStreamChain, STREAM_CHUNK_DEFAULT, STREAM_FORMAT } from './src/kem-stream.js';
 import { newCeremonySheet, appendCeremonyRow, verifyCeremonyChain, responseShaMatches, CEREMONY_FORMAT } from './src/ceremony.js';
@@ -341,18 +341,22 @@ if (cmd === 'keygen') {
 
   สำหรับ automation (หลีกเลี่ยง prompt): กำหนด SOVEREIGN_PASSPHRASE=... ก่อนคำสั่ง
 
-  ZK-SNARK (นิรนามแท้ — เฟส 2/3 + โปรไฟล์ลึก D=5 v1.5):
-  node cli.js zk enroll "ชื่อสมาชิก"           ลงทะเบียนสมาชิก (สูงสุด 32 คนสำหรับโปรไฟล์ลึก)
+  ZK-SNARK (นิรนามแท้ — เฟส 2/3 + ตัวกำเนิดวงจร v2.2 · ทุกความลึก D):
+  node cli.js zk enroll "ชื่อสมาชิก"           ลงทะเบียนสมาชิก (สูงสุดตามโปรไฟล์ที่มีแฟ้มวงจรพร้อม)
   node cli.js zk list                          อ่านทะเบียน (เห็น commitment เท่านั้น ไม่มีตัวตน)
-  node cli.js zk tree [--deep]                 คำนวณรากสมาชิก + เขียน data/members_root.json (--deep = โปรไฟล์ลึก D=5)
-  node cli.js zk prove "ชื่อสมาชิก" [epoch]    พิสูจน์นิรนาม → data/zk-receipt-<epoch>.json (ธง --seal-to <kem-pub.json> = ผนึกในคำสั่งเดียว v1.7)
+  node cli.js zk tree [--depth N|--deep]       คำนวณรากสมาชิก + เขียน data/members_root.json (--depth 1-12 · --deep = D=5 · ไม่มีธง = ฐาน D=4)
+  node cli.js zk prove "ชื่อสมาชิก" [epoch]    พิสูจน์นิรนาม → data/zk-receipt-<epoch>.json (อ่านโปรไฟล์จากแฟ้มราก · ธง --seal-to <kem-pub.json> = ผนึกในคำสั่งเดียว v1.7)
   node cli.js zk verify <แฟ้มใบพิสูจน์.json>   ฝั่งโหนดตรวจ: vkey ตาม field circuit ในใบ + กัน nullifier ซ้ำ (exit 0 = ผ่าน)
 
-  node cli.js zk issue "ชื่อ" <สตางค์>       ออกใบยอด (สูงสุด 32 ใบสำหรับโปรไฟล์ลึก)
+  node cli.js zk issue "ชื่อ" <สตางค์>       ออกใบยอด (สูงสุดตามโปรไฟล์ที่มีแฟ้มวงจรพร้อม)
   node cli.js zk issue-list                  อ่านทะเบียนใบยอด (เห็น commitment เท่านั้น ไม่มียอด)
-  node cli.js zk balance-tree [--deep]       คำนวณรากใบยอด + เขียน data/balances_root.json (--deep = โปรไฟล์ลึก D=5)
+  node cli.js zk balance-tree [--depth N|--deep]  คำนวณรากใบยอด + เขียน data/balances_root.json (ตัวเลือกความลึกเดียวกับ tree)
   node cli.js zk prove-bal "ชื่อ" <threshold> [epoch]  พิสูจน์ "ยอด ≥ threshold" → data/zk-balance-<epoch>.json (ธง --seal-to <kem-pub.json> = ผนึกในคำสั่งเดียว v1.7)
   node cli.js zk verify-bal <แฟ้ม.json>      ฝั่งโหนดตรวจยอด: vkey ตาม field circuit ในใบ + กัน nullifier ซ้ำ (exit 0 = ผ่าน)
+
+  ตัวกำเนิดวงจร (v2.2 · Q-04 — ออกโปรไฟล์ความลึกใหม่ด้วยคำสั่งเดียว):
+  node scripts/gen-circuits.mjs 7 [--recheck|--list]   สร้าง .circom ระดับ D จากแฟ้มต้นฉบับ (โค้ดหลักไบต์ตรง)
+  node scripts/build-depth.mjs 7 [--force]             สร้างแฟ้มวงจรครบชุด: compile → Groth16 setup → artifacts/
 
   สำหรับ automation (หลีกเลี่ยง prompt): กำหนด SOVEREIGN_MEMBER_PASS=... สำหรับ vault สมาชิก · SOVEREIGN_BALANCE_PASS=... สำหรับคลังใบยอด (แฟ้มแยก passphrase แยกกัน)
 
@@ -444,15 +448,33 @@ async function zkNamespace(rest) {
     fs.writeFileSync(BVAULT, JSON.stringify(createVault(data, passphrase), null, 2));
   };
 
+  // ── ตัวเลือกความลึกต้นไม้ (v2.2 · Q-04): --depth N (1-12) · --deep = alias ของ D=5 · ไม่มีธง = ฐาน D=4 ──
+  const MAX_DEPTH = 12; // ขีดเดียวกับ depthFromRootFile (src/merkle.js) และ gen-circuits
+  const depthFromFlags = (arr) => {
+    if (arr.includes('--deep')) return DEEP_DEPTH;
+    const i = arr.indexOf('--depth');
+    if (i < 0) return MERKLE_DEPTH;
+    const n = Number(arr[i + 1]);
+    return Number.isInteger(n) && n >= 1 && n <= MAX_DEPTH ? n : null;
+  };
+  const profileLabel = (depth) => depth === 4 ? 'ฐาน D=4 (16 ช่อง)' : depth === 5 ? 'ลึก D=5 (32 ช่อง)' : 'D=' + depth + ' (' + 2 ** depth + ' ช่อง)';
+  // ความจุสูงสุดที่ใช้จริงได้ = ระดับที่แฟ้มวงจร (wasm/zkey/vkey) พร้อมจริงใน artifacts/
+  const maxReadyDepth = (kind) => {
+    let best = 4; // ฐาน D=4 เป็นชุดที่ repo แนบมาเสมอ
+    for (let d = 5; d <= MAX_DEPTH; d++) if (artifactsReadyFor(kind, d)) best = d;
+    return best;
+  };
+
   if (sub === 'enroll') {
     const label = rest[1] || '';
     if (!label) { console.error(C.r('ใช้งาน: node cli.js zk enroll "ชื่อสมาชิก"')); process.exit(1); }
     const pub = readMembersPublic();
     if (pub.some((m) => m.label === label)) { console.error(C.r('ชื่อสมาชิก "' + label + '" ลงทะเบียนแล้ว')); process.exit(1); }
-    const MAX_CAPACITY = 2 ** DEEP_DEPTH; // 32 — รองรับโปรไฟล์ลึก D=5
+    const maxDepth = maxReadyDepth('membership');
+    const MAX_CAPACITY = 2 ** maxDepth; // ความจุของโปรไฟล์ที่แฟ้มวงจรพร้อมจริง (ฐาน D=4 · ลึก D=5 · D=6 จาก v2.2)
     const createNew = !fs.existsSync(MVAULT);
     const needBe = pub.length + 1;
-    if (needBe > MAX_CAPACITY) { console.error(C.r('สมาชิกเต็มความจุสูงสุด (' + MAX_CAPACITY + ' คน)')); process.exit(1); }
+    if (needBe > MAX_CAPACITY) { console.error(C.r('สมาชิกเต็มความจุสูงสุด (' + MAX_CAPACITY + ' คน — โปรไฟล์ D=' + maxDepth + ') · ออกโปรไฟล์ลึกกว่าได้: node scripts/build-depth.mjs <D>')); process.exit(1); }
 
     const { data: vaultData, passphrase } = await openMemberVault(createNew);
     // กุญแจลับ 31 ไบต์ (< BN254 p) — ถูกเก็บใน vault เข้ารหัสแบบเดียวกับกุญแจตัวตน
@@ -469,26 +491,30 @@ async function zkNamespace(rest) {
     console.log(C.y('  ✍ ต่อไป: node cli.js zk tree  แล้วส่ง data/members.json ให้ผู้ตรวจ (ห้ามส่งแฟ้ม vault)'));
   } else if (sub === 'list') {
     const pub = readMembersPublic();
-    const MAX_CAPACITY = 2 ** DEEP_DEPTH;
-    console.log(C.g(`ทะเบียนสมาชิก ${pub.length}/${MAX_CAPACITY} (สูงสุดสำหรับโปรไฟล์ลึก D=5):`));
+    const maxDepth = maxReadyDepth('membership');
+    const MAX_CAPACITY = 2 ** maxDepth;
+    console.log(C.g(`ทะเบียนสมาชิก ${pub.length}/${MAX_CAPACITY} (สูงสุดของโปรไฟล์ที่มีแฟ้มวงจรพร้อม: D=${maxDepth}):`));
     for (const [i, m] of pub.entries()) {
       console.log(`  [${i}] ${C.b(m.label)}  commitment: 0x${BigInt(m.commitment).toString(16).slice(0, 20)}…`);
     }
     console.log(C.dim('  (commitment คือ hash ของกุญแจลับ — ตรวจสลิปไม่ปรากฏตัวตน)'));
   } else if (sub === 'tree') {
-    const deep = rest.includes('--deep');
-    const depth = deep ? DEEP_DEPTH : MERKLE_DEPTH;
+    const depth = depthFromFlags(rest);
+    if (depth === null) { console.error(C.r('ใช้งาน: --depth N (1-' + MAX_DEPTH + ') หรือ --deep (D=5) — ไม่มีธง = ฐาน D=4')); process.exit(1); }
     const capacity = 2 ** depth;
     const pub = readMembersPublic();
     if (pub.length === 0) { console.error(C.r('ยังไม่มีสมาชิก — enroll ก่อน')); process.exit(1); }
-    if (pub.length > capacity) { console.error(C.r('สมาชิกเกินความจุโปรไฟล์ ' + (deep ? 'ลึก' : 'ฐาน') + ' (' + capacity + ' คน)')); process.exit(1); }
+    if (pub.length > capacity) { console.error(C.r('สมาชิกเกินความจุโปรไฟล์ ' + profileLabel(depth))); process.exit(1); }
     const poseidon = await loadPoseidon();
     const tree = buildTree(pub.map((m) => BigInt(m.commitment)), poseidon, { depth });
     const rootHex = '0x' + tree.root.toString(16);
     fs.mkdirSync('data', { recursive: true });
     fs.writeFileSync('data/members_root.json', JSON.stringify({ root: rootHex, members: pub.length, depth: tree.depth, capacity, generated_at: new Date().toISOString(), labels: pub.map((m) => m.label) }, null, 2));
     console.log(C.g('✓ รากสมาชิก (merkleRoot): ' + C.b(rootHex.slice(0, 26) + '…')));
-    console.log('  โปรไฟล์: ' + (deep ? 'ลึก D=5 (32 ช่อง)' : 'ฐาน D=4 (16 ช่อง)'));
+    console.log('  โปรไฟล์: ' + profileLabel(depth));
+    if (!artifactsReadyFor('membership', depth)) {
+      console.log(C.y('  ✍ ยังไม่มีแฟ้มวงจร D=' + depth + ' ใน artifacts/ — รัน node scripts/build-depth.mjs ' + depth + ' ก่อนพิสูจน์'));
+    }
     console.log('  สมาชิก ' + pub.length + ' จากความจุสูงสุด ' + capacity);
     console.log(C.dim('  แฟ้มราก: data/members_root.json — ผู้ตรวจถือแฟ้มนี้เท่านั้น'));
   } else if (sub === 'prove') {
@@ -501,9 +527,8 @@ async function zkNamespace(rest) {
     const depth = depthFromRootFile(rootFile);
     const capacity = capacityFromRootFile(rootFile);
     const pub = readMembersPublic();
-    const isDeep = depth === DEEP_DEPTH;
-    const artifactsOk = isDeep ? artifactsReadyDeep() : artifactsReady();
-    if (!artifactsOk) { console.error(C.r('ยังไม่มีแฟ้มวงจรโปรไฟล์ ' + (isDeep ? 'ลึก D=5' : 'ฐาน D=4') + ' ใน artifacts/ — ดู README หัวข้อ "การสร้างแฟ้มวงจร"')); process.exit(1); }
+    const artifactsOk = artifactsReadyFor('membership', depth);
+    if (!artifactsOk) { console.error(C.r('ยังไม่มีแฟ้มวงจร D=' + depth + ' ใน artifacts/ — สร้างด้วย: node scripts/build-depth.mjs ' + depth + ' (ดู README หัวข้อ "ตัวกำเนิดวงจร")')); process.exit(1); }
     const idx = pub.findIndex((m) => m.label === label);
     if (idx < 0) { console.error(C.r('ไม่พบสมาชิก "' + label + '" — รัน node cli.js zk list ดูชื่อที่ลงทะเบียนไว้')); process.exit(1); }
     const member = await openMemberByLabel(label);
@@ -517,8 +542,8 @@ async function zkNamespace(rest) {
     const tree = buildTree(pub.map((m) => BigInt(m.commitment)), poseidon, { depth });
     const path = pathFor(tree, idx);
     console.log('พิสูจน์นิรนาม (กุญแจลับอยู่ในหน่วยความจำระหว่างคำนวณเท่านั้น)…');
-    const arts = isDeep ? { wasm: 'artifacts/membership_d5.wasm', zkey: 'artifacts/membership_d5.zkey' } : null;
-    const circuit = isDeep ? CIRCUIT.membershipDeep : CIRCUIT.membership;
+    const arts = membershipArtifactsFor(depth);
+    const circuit = circuitNameFor('membership', depth);
     const { proof, publicSignals } = await proveMembership({ secret: secretBig, path, root: tree.root, epoch: BigInt(epoch), artifacts: arts });
     const rootView = { members: pub.length };
     const rec = anonReceipt({ proof, publicSignals, epoch, rootView, circuit });
@@ -539,9 +564,9 @@ async function zkNamespace(rest) {
     if (!fs.existsSync(file)) { console.error(C.r('ไม่พบแฟ้ม ' + file)); process.exit(1); }
     const rec = JSON.parse(fs.readFileSync(file, 'utf8'));
     if (!rec.zkProof || rec.authMode !== 'zk-snark-groth16' || !rec.circuit) { console.error(C.r('แฟ้มไม่ใช่ใบพิสูจน์ ZK วงจร membership ของระบบนี้')); process.exit(1); }
-    // ตรวจสอบว่าวงจรที่ระบุในใบเป็นที่รู้จัก (v1 หรือ d5_v1)
-    const isDeep = rec.circuit === CIRCUIT.membershipDeep;
-    if (!isDeep && rec.circuit !== CIRCUIT.membership) { console.error(C.r('วงจรไม่รองรับ: ' + rec.circuit)); process.exit(1); }
+    // อ่านวงจรจากฟิลด์ circuit ของใบ — ผู้ตรวจเลือก vkey ตามฟิลด์เอง (รองรับทุกโปรไฟล์: v1 · dN_v1 ตาม v2.2)
+    const parsedCircuit = parseCircuitName(rec.circuit);
+    if (!parsedCircuit || parsedCircuit.kind !== 'membership') { console.error(C.r('วงจรไม่รองรับ: ' + rec.circuit)); process.exit(1); }
     // ลำดับ publicSignals ของ vkey: [nullifierHash, merkleRoot, epochNonce]
     const signals = [
       BigInt(rec.publicSignals.nullifierHash).toString(10),
@@ -549,7 +574,8 @@ async function zkNamespace(rest) {
       String(BigInt(rec.publicSignals.epochNonce)),
     ];
     const proof = { pi_a: rec.zkProof.pi_a, pi_b: rec.zkProof.pi_b, pi_c: rec.zkProof.pi_c };
-    const vkeyPath = isDeep ? 'artifacts/membership_d5_vkey.json' : 'artifacts/membership_vkey.json';
+    const vkeyPath = vkeyPathForCircuit(rec.circuit);
+    if (!fs.existsSync(vkeyPath)) { console.error(C.r('ยังไม่มีแฟ้ม vkey ของวงจร ' + rec.circuit + ' — ดึงจากผู้ออกใบ หรือสร้างด้วย: node scripts/build-depth.mjs ' + parsedCircuit.depth)); process.exit(1); }
     const ok = await verifyMembership({ proof, publicSignals: { nullifierHash: signals[0], merkleRoot: signals[1], epochNonce: signals[2] }, vkeyPath });
     if (!ok) {
       console.error(C.r('✗ ใบพิสูจน์ไม่ผ่าน (proof ไม่เที่ยงตามวงจร)'));
@@ -578,7 +604,8 @@ async function zkNamespace(rest) {
     let amountBig;
     try { amountBig = BigInt(amountStr); } catch { console.error(C.r('ยอดต้องเป็นจำนวนเต็ม (สตางค์)')); process.exit(1); }
     if (amountBig < 1n || amountBig > BAL_MAX) { console.error(C.r('ยอดต้องอยู่ในช่วงจำนวนเต็ม 64 บิต (1 … 18,446,744,073,709,551,615 สตางค์)')); process.exit(1); }
-    const MAX_CAPACITY = 2 ** DEEP_DEPTH; // 32 — รองรับโปรไฟล์ลึก D=5
+    const maxDepth = maxReadyDepth('balance');
+    const MAX_CAPACITY = 2 ** maxDepth; // ความจุของโปรไฟล์ที่แฟ้มวงจร balance พร้อมจริง
     const createNew = !fs.existsSync(BVAULT);
     const { data: balVault, passphrase } = await openBalanceVault(createNew);
     if (balVault.balances.some((b) => b.label === label)) { console.error(C.r('ใบยอด "' + label + '" มีอยู่แล้ว — ใบใหม่ใช้ชื่อเรียกต่างกัน')); process.exit(1); }
@@ -598,17 +625,18 @@ async function zkNamespace(rest) {
     console.log(C.y('  ✍ ต่อไป: node cli.js zk balance-tree  แล้วประกาศรากให้ผู้ตรวจ (ห้ามส่งแฟ้มคลังใบยอด)'));
   } else if (sub === 'issue-list') {
     const pub = readIssuedPublic();
-    const MAX_CAPACITY = 2 ** DEEP_DEPTH;
-    console.log(C.g(`ทะเบียนใบยอด ${pub.length}/${MAX_CAPACITY} (สูงสุดสำหรับโปรไฟล์ลึก D=5):`));
+    const maxDepth = maxReadyDepth('balance');
+    const MAX_CAPACITY = 2 ** maxDepth;
+    console.log(C.g(`ทะเบียนใบยอด ${pub.length}/${MAX_CAPACITY} (สูงสุดของโปรไฟล์ที่มีแฟ้มวงจรพร้อม: D=${maxDepth}):`));
     for (const c of pub) console.log(`  [ใบยอดที่ ${c.index}]  commitment: 0x${BigInt(c.commitment).toString(16).slice(0, 20)}…`);
     console.log(C.dim('  (commitment คือ hash ของ (ยอด, เหลื่อมสุ่ม) — ตรวจสลิปไม่ปรากฏทั้งตัวตนและยอด)'));
   } else if (sub === 'balance-tree') {
-    const deep = rest.includes('--deep');
-    const depth = deep ? DEEP_DEPTH : MERKLE_DEPTH;
+    const depth = depthFromFlags(rest);
+    if (depth === null) { console.error(C.r('ใช้งาน: --depth N (1-' + MAX_DEPTH + ') หรือ --deep (D=5) — ไม่มีธง = ฐาน D=4')); process.exit(1); }
     const capacity = 2 ** depth;
     const pub = readIssuedPublic();
     if (pub.length === 0) { console.error(C.r('ยังไม่มีใบยอด — รัน node cli.js zk issue ก่อน')); process.exit(1); }
-    if (pub.length > capacity) { console.error(C.r('ใบยอดเกินความจุโปรไฟล์ ' + (deep ? 'ลึก' : 'ฐาน') + ' (' + capacity + ' ใบ)')); process.exit(1); }
+    if (pub.length > capacity) { console.error(C.r('ใบยอดเกินความจุโปรไฟล์ ' + profileLabel(depth))); process.exit(1); }
     const poseidon = await loadPoseidon();
     // โหนดต้นไม้ใช้แท็กเดียวกับวงจร membership (TAG_NODE = 0) — วงจร balance สร้างต้นไม้แบบเดียวกันเป๊ะ
     const tree = buildTree(pub.map((c) => BigInt(c.commitment)), poseidon, { depth });
@@ -616,7 +644,10 @@ async function zkNamespace(rest) {
     fs.mkdirSync('data', { recursive: true });
     fs.writeFileSync(BROOT, JSON.stringify({ root: rootHex, cards: pub.length, depth: tree.depth, capacity, generated_at: new Date().toISOString() }, null, 2));
     console.log(C.g('✓ รากใบยอด (merkleRoot): ' + C.b(rootHex.slice(0, 26) + '…')));
-    console.log('  โปรไฟล์: ' + (deep ? 'ลึก D=5 (32 ใบ)' : 'ฐาน D=4 (16 ใบ)'));
+    console.log('  โปรไฟล์: ' + profileLabel(depth));
+    if (!artifactsReadyFor('balance', depth)) {
+      console.log(C.y('  ✍ ยังไม่มีแฟ้มวงจร balance D=' + depth + ' ใน artifacts/ — รัน node scripts/build-depth.mjs ' + depth + ' ก่อนพิสูจน์'));
+    }
     console.log('  ' + pub.length + ' ใบจากความจุ ' + capacity);
     console.log(C.dim('  แฟ้มราก: ' + BROOT + ' — issuer ต้องประกาศรากนี้ให้ผู้ตรวจถือค้างไว้ (ใบนอกรากนี้ = ผู้ตรวจปฏิเสธ)'));
   } else if (sub === 'prove-bal') {
@@ -632,9 +663,8 @@ async function zkNamespace(rest) {
     const rootFile = JSON.parse(fs.readFileSync(BROOT, 'utf8'));
     const depth = depthFromRootFile(rootFile);
     const capacity = capacityFromRootFile(rootFile);
-    const isDeep = depth === DEEP_DEPTH;
-    const artifactsOk = isDeep ? artifactsReadyBalanceDeep() : artifactsReadyBalance();
-    if (!artifactsOk) { console.error(C.r('ยังไม่มีแฟ้มวงจร balance โปรไฟล์ ' + (isDeep ? 'ลึก D=5' : 'ฐาน D=4') + ' ใน artifacts/ — ดู README หัวข้อ "การสร้างแฟ้มวงจร"')); process.exit(1); }
+    const artifactsOk = artifactsReadyFor('balance', depth);
+    if (!artifactsOk) { console.error(C.r('ยังไม่มีแฟ้มวงจร balance D=' + depth + ' ใน artifacts/ — สร้างด้วย: node scripts/build-depth.mjs ' + depth + ' (ดู README หัวข้อ "ตัวกำเนิดวงจร")')); process.exit(1); }
     const pub = readIssuedPublic();
     const { data: balVault } = await openBalanceVault(false);
     const card = balVault.balances.find((b) => b.label === label);
@@ -659,8 +689,8 @@ async function zkNamespace(rest) {
       process.exit(1);
     }
     console.log(`พิสูจน์ "ยอด ≥ ${thresholdBig} สตางค์" (ยอดจริงอยู่ในวงจรเท่านั้น ไม่กลายเป็นข้อมูลสาธารณะ)…`);
-    const arts = isDeep ? { wasm: 'artifacts/balance_d5.wasm', zkey: 'artifacts/balance_d5.zkey' } : null;
-    const circuit = isDeep ? CIRCUIT.balanceDeep : CIRCUIT.balance;
+    const arts = balanceArtifactsFor(depth);
+    const circuit = circuitNameFor('balance', depth);
     const { proof, publicSignals } = await proveBalance({ balance: balanceBig, blinding: blindingBig, path, root: tree.root, epoch: BigInt(epoch), threshold: thresholdBig, artifacts: arts });
     const rec = balanceReceipt({ proof, publicSignals, epoch, threshold: thresholdBig, circuit });
     fs.mkdirSync('data', { recursive: true });
@@ -680,9 +710,9 @@ async function zkNamespace(rest) {
     if (!fs.existsSync(file)) { console.error(C.r('ไม่พบแฟ้ม ' + file)); process.exit(1); }
     const rec = JSON.parse(fs.readFileSync(file, 'utf8'));
     if (!rec.zkProof || rec.authMode !== 'zk-snark-groth16' || !rec.circuit) { console.error(C.r('แฟ้มไม่ใช่ใบพิสูจน์ ZK วงจร balance ของระบบนี้')); process.exit(1); }
-    // ตรวจสอบว่าวงจรที่ระบุในใบเป็นที่รู้จัก (v1 หรือ d5_v1)
-    const isDeep = rec.circuit === CIRCUIT.balanceDeep;
-    if (!isDeep && rec.circuit !== CIRCUIT.balance) { console.error(C.r('วงจรไม่รองรับ: ' + rec.circuit)); process.exit(1); }
+    // อ่านวงจรจากฟิลด์ circuit ของใบ — ผู้ตรวจเลือก vkey ตามฟิลด์เอง (รองรับทุกโปรไฟล์: v1 · dN_v1 ตาม v2.2)
+    const parsedCircuit = parseCircuitName(rec.circuit);
+    if (!parsedCircuit || parsedCircuit.kind !== 'balance') { console.error(C.r('วงจรไม่รองรับ: ' + rec.circuit)); process.exit(1); }
     // ลำดับ publicSignals ของ vkey: [nullifierHash, merkleRoot, epochNonce, threshold]
     const signals = [
       BigInt(rec.publicSignals.nullifierHash).toString(10),
@@ -691,7 +721,8 @@ async function zkNamespace(rest) {
       String(BigInt(rec.publicSignals.threshold)),
     ];
     const proof = { pi_a: rec.zkProof.pi_a, pi_b: rec.zkProof.pi_b, pi_c: rec.zkProof.pi_c };
-    const vkeyPath = isDeep ? 'artifacts/balance_d5_vkey.json' : 'artifacts/balance_vkey.json';
+    const vkeyPath = vkeyPathForCircuit(rec.circuit);
+    if (!fs.existsSync(vkeyPath)) { console.error(C.r('ยังไม่มีแฟ้ม vkey ของวงจร ' + rec.circuit + ' — ดึงจากผู้ออกใบ หรือสร้างด้วย: node scripts/build-depth.mjs ' + parsedCircuit.depth)); process.exit(1); }
     const ok = await verifyBalance({ proof, publicSignals: { nullifierHash: signals[0], merkleRoot: signals[1], epochNonce: signals[2], threshold: signals[3] }, vkeyPath });
     if (!ok) {
       console.error(C.r('✗ ใบพิสูจน์ยอดไม่ผ่าน (proof ไม่เที่ยงตามวงจร)'));
@@ -918,14 +949,14 @@ async function zkNamespace(rest) {
       '  — วงจรที่ 1: Anonymous Membership —',
       '  node cli.js zk enroll "ชื่อ"        ลงทะเบียนสมาชิก (สูงสุด 32 คน)',
       '  node cli.js zk list                 ดูทะเบียนสมาชิก',
-      '  node cli.js zk tree [--deep]        คำนวณรากสมาชิก (--deep = โปรไฟล์ลึก D=5)',
+      '  node cli.js zk tree [--depth N]     คำนวณรากสมาชิก (--depth 1-12 · --deep = D=5 · ไม่มีธง = ฐาน D=4)',
       '  node cli.js zk prove "ชื่อ" [epoch] พิสูจน์นิรนาม (อ่านโปรไฟล์จาก data/members_root.json)',
       '  node cli.js zk verify <file>        ฝั่งโหนดตรวจ (เลือก vkey จาก field circuit ในใบ)',
       '',
       '  — วงจรที่ 2: Balance Threshold —',
       '  node cli.js zk issue "ชื่อ" <สตางค์>           ออกใบยอด (สูงสุด 32 ใบ)',
       '  node cli.js zk issue-list                    ดูทะเบียนใบยอด',
-      '  node cli.js zk balance-tree [--deep]         คำนวณรากใบยอด (--deep = โปรไฟล์ลึก D=5)',
+      '  node cli.js zk balance-tree [--depth N]      คำนวณรากใบยอด (ตัวเลือกความลึกเดียวกับ tree)',
       '  node cli.js zk prove-bal "ชื่อ" <threshold> [epoch]  พิสูจน์ "ยอด ≥ threshold" (ธง --seal-to <kem-pub.json> = ผนึกในคำสั่งเดียว v1.7)',
       '  node cli.js zk verify-bal <file>             ฝั่งโหนดตรวจยอด (เลือก vkey จาก field circuit ในใบ)',
       '',

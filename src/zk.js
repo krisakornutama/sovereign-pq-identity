@@ -65,6 +65,59 @@ export function artifactsReadyBalanceDeep(base = process.cwd()) {
   return artifactsReadySet(ARTIFACTS_BALANCE_DEEP, base);
 }
 
+// ── ชั้นเลือกโปรไฟล์แบบ dynamic ตามความลึก D (v2.2 · Q-04) ────────────────────
+// รูปแฟ้ม: D=4 = ไม่มี suffix (membership.*) · D≥5 = membership_dN.* (ตาม precedent d5 ที่ commit ไว้)
+export function suffixFor(depth) {
+  return depth === 4 ? '' : '_d' + depth;
+}
+
+export function membershipArtifactsFor(depth) {
+  if (depth === 4) return ARTIFACTS;
+  if (depth === 5) return ARTIFACTS_DEEP;
+  const suf = suffixFor(depth);
+  return {
+    wasm: 'artifacts/membership' + suf + '.wasm',
+    zkey: 'artifacts/membership' + suf + '.zkey',
+    vkey: 'artifacts/membership' + suf + '_vkey.json',
+  };
+}
+
+export function balanceArtifactsFor(depth) {
+  if (depth === 4) return ARTIFACTS_BALANCE;
+  if (depth === 5) return ARTIFACTS_BALANCE_DEEP;
+  const suf = suffixFor(depth);
+  return {
+    wasm: 'artifacts/balance' + suf + '.wasm',
+    zkey: 'artifacts/balance' + suf + '.zkey',
+    vkey: 'artifacts/balance' + suf + '_vkey.json',
+  };
+}
+
+export function artifactsReadyFor(kind, depth, base = process.cwd()) {
+  const arts = kind === 'balance' ? balanceArtifactsFor(depth) : membershipArtifactsFor(depth);
+  return artifactsReadySet(arts, base);
+}
+
+// ชื่อวงจรที่ลง field circuit ของใบพิสูจน์: membership_v1 (D=4) · membership_dN_v1 (D≥5)
+export function circuitNameFor(kind, depth) {
+  return depth === 4 ? kind + '_v1' : kind + '_d' + depth + '_v1';
+}
+
+// อ่านย้อนจาก field circuit ของใบ → { kind, depth } — ผู้ตรวจเลือก vkey จากฟิลด์นี้เอง (ไม่ต้องมีตารางตายตัว)
+export function parseCircuitName(name) {
+  const m = /^(membership|balance)(?:_d(\d{1,2}))?_v1$/.exec(String(name || ''));
+  if (!m) return null;
+  return { kind: m[1], depth: m[2] ? Number(m[2]) : 4 };
+}
+
+// vkey แฟ้มไหนตรวจใบที่ field circuit = name — แฟ้ม vkey ไม่มีใน artifacts/ = โยงไปสายสร้าง
+export function vkeyPathForCircuit(name, base = process.cwd()) {
+  const parsed = parseCircuitName(name);
+  if (!parsed) return null;
+  const arts = parsed.kind === 'balance' ? balanceArtifactsFor(parsed.depth) : membershipArtifactsFor(parsed.depth);
+  return nodePath.join(base, arts.vkey);
+}
+
 // ส่งสัญญาณเข้าวงจร: ต้องเป็น string-decimal ทั้งหมด (รูปแบบที่ witness WASM อ่าน)
 export function witnessInputs({ secret, path, root, epoch }) {
   return {

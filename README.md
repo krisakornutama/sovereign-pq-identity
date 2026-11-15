@@ -10,7 +10,7 @@
 [![Standard](https://img.shields.io/badge/Standard-FIPS_203_ML--KEM-fbbf24?style=for-the-badge&labelColor=030712)](https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.203.pdf)
 [![Zero Cloud](https://img.shields.io/badge/Cloud-ZERO-34d399?style=for-the-badge&labelColor=030712)](.)
 [![ZK-SNARK](https://img.shields.io/badge/ZK--SNARK-Groth16_BN254-a855f7?style=for-the-badge&labelColor=030712)](#-️-zk-snark-anonymous-proof-v12--พิสูจน์ว่าเป็นสมาชิกโดยไม่บอกว่าใคร)
-[![Tests](https://img.shields.io/badge/Tests-66_passing-22d3ee?style=for-the-badge&labelColor=030712)](#-ผลการทดสอบจากเครื่องจริง)
+[![Tests](https://img.shields.io/badge/Tests-72_passing-22d3ee?style=for-the-badge&labelColor=030712)](#-ผลการทดสอบจากเครื่องจริง)
 [![Node](https://img.shields.io/badge/Node.js-%E2%89%A520-43853d?style=for-the-badge&labelColor=030712)](./package.json)
 
 </div>
@@ -289,6 +289,48 @@ npx snarkjs zkey export verificationkey build/membership_final.zkey artifacts/me
 cp build/membership_js/membership.wasm artifacts/membership.wasm
 cp build/membership_final.zkey artifacts/membership.zkey
 ```
+### ตัวกำเนิดวงจร v2.2 (Q-04) — โปรไฟล์ความลึก D ใดก็ได้จากคำสั่งเดียว
+
+> **แหล่งความจริงเดียว = วงจรต้นฉบับใน repo** (`circuits/membership.circom` · `circuits/balance.circom`) · generator แค่แทนพารามิเตอร์ D บรรทัด `component main …` — โค้ดหลักเหมือนกันทุกบิต · แฟ้ม D=4/D=5 ที่ commit ไว้ไม่ถูกแทน · ย้อนเข้ากันได้: ใบเดิมทุกรูปตรวจด้วย vkey เดิมตลอด
+
+```bash
+# 1) สร้าง .circom ระดับ D (D=4 คือต้นฉบับ · D=5 คือโปรไฟล์ลึก v1.5 ที่มีอยู่แล้ว · D≥6 ใหม่)
+node scripts/gen-circuits.mjs 6              # สร้าง circuits/membership_d6.circom + circuits/balance_d6.circom
+node scripts/gen-circuits.mjs --list         # ดูระดับที่มีวงจร + artifacts พร้อมจริง
+node scripts/gen-circuits.mjs 6 --recheck    # พิสูจน์ย้อน: generate D=5 ต้องตรงแฟ้ม d5 ที่ commit ไว้ทุกบรรทัดโค้ด (ไม่นับคอมเมนต์)
+
+# 2) สร้างแฟ้มวงจรครบชุด: compile → Groth16 setup → copy ไป artifacts/
+node scripts/build-depth.mjs 6               # ทั้งสองวงจร (membership + balance)
+node scripts/build-depth.mjs 6 --force       # ออกพิธีใหม่แทน D=6 (entropy ใหม่ทั้งชุด)
+node scripts/build-depth.mjs 7 membership    # เฉพาะวงจรเดียว · D=7/8 generator รองรับ แต่ไม่ compile ล่วงหน้า (กัน repo บวม)
+
+# 3) ใช้งานผ่าน CLI ธง --depth N (คง --deep = D=5 alias)
+node cli.js zk tree --depth 6                # ราก 64 ช่อง
+node cli.js zk prove "สมาชิก" [epoch]        # อ่านโปรไฟล์จากแฟ้มรากอัตโนมัติ
+node cli.js zk verify data/zk-receipt-<epoch>.json  # เลือก vkey จาก field circuit ในใบ (ไม่ต้องมีตารางตายตัว)
+node cli.js zk balance-tree --depth 6
+node cli.js zk prove-bal "ใบยอด" 10000000
+node cli.js zk verify-bal data/zk-balance-<epoch>.json
+```
+
+**ขนาด/เวลาจริง D=6 (pot14 · 4864/4933 constraints · build บนเครื่องสร้างระบบ):**
+| วงจร | wasm | zkey | constraints | เวลาพิธีรวม |
+|---|---:|---:|---:|---:|
+| membership_d6 | 1.78 MB | 2.17 MB | 4,864 | ~58 s |
+| balance_d6 | 1.78 MB | 2.20 MB | 4,933 | ~58 s |
+
+**โครงสร้างแฟ้ม D≥6 (ตาม precedent D=5):**
+- `circuits/membership_d6.circom` / `balance_d6.circom` (จาก generator)
+- `artifacts/membership_d6.wasm` · `membership_d6.zkey` · `membership_d6_vkey.json`
+- `artifacts/balance_d6.wasm` · `balance_d6.zkey` · `balance_d6_vkey.json`
+- ชื่อวงจรใน field `circuit` ของใบ: `membership_d6_v1` / `balance_d6_v1` — ผู้ตรวจ parse เอง (`parseCircuitName`)
+
+**โรดแม็ป Q-04 (ตัดสินใจแล้ว):**
+- ✅ Generator ไบต์ตรงจากต้นฉบับ + พิสูจน์ย้อน D=5 ผ่าน (`--recheck` exit 0)
+- ✅ Compile + commit D=6 ทั้งสองวงจร (64 ช่อง) — artifacts ใน repo
+- ✅ Dynamic selector ใน `src/zk.js` + CLI `--depth N` (คง `--deep`)
+- ✅ D=7/8 generator ผลิตได้ด้วยคำสั่งเดียว แต่ **ไม่ compile ล่วงหน้า** (ไม่มีผู้ใช้จริง · กัน repo บวม)
+- ✅ ย้อนเข้ากันได้: ใบ D=4/D=5 ที่มีอยู่ตรวจด้วย vkey เดิมตลอด · แฟ้มเดิมไม่ถูกแตะ
 
 ### ข้อจำกัดที่ควรรู้ก่อนพาไปใช้จริง (ตามความจริง)
 

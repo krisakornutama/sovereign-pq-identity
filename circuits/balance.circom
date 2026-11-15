@@ -38,7 +38,7 @@ template BalanceThreshold(D, NBITS) {
     // ----- ข้อมูลสาธารณะ (ผู้ตรวจถืออยู่แล้ว) -----
     signal input merkleRoot;       // รากของต้นไม้ใบยอดที่ issuer ประกาศ
     signal input epochNonce;       // หมายเลขรอบ — กันการนำ Proof เดิมกลับมา
-    signal input threshold;        // ขั้นต่ำที่ผู้ตรวจยอมรับ (สาธารณะจริง — เช่น POS ประกาศ "ต้อง ≥ หนึ่งหนึ่งโห")
+    signal input threshold;        // ขั้นต่ำที่ผู้ตรวจยอมรับ (สาธารณะจริง — เช่น POS ประกาศ "ต้อง ≥ หนึ่งแสน")
 
     // ----- สัญญาณสาธารณะที่ออกจากวงจร -----
     signal output nullifierHash;   // แตะสิทธิ์รอบนี้ — ผู้ตรวจบันทึกห้ามซ้ำ

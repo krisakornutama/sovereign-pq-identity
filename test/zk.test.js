@@ -1,17 +1,21 @@
 // ทดสอบ ZK-SNARK Anonymous Membership — วงจรจริง (artifacts เท่านั้น ไม่มีจำลอง)
-// ถ้ายังไม่มีแฟ้มวงจร ทดสอบพิสูจน์ข้าม (skip) พร้อมเหตุผล — วิธีสร้างแฟ้มวงจรอยู่ใน README หัวข้อ "การสร้างแฟ้มวงจร"
+// ถ้ายังไม่มีแฟ้มวงจร ทดสอบพิสูจน์ข้าม (skip) พร้อมเหตุผล — วิธีสร้างด้วย node scripts/build-depth.mjs <D> (v2.2)
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import nodePath from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { loadPoseidon, buildTree, pathFor, newMemberSecret, MERKLE_DEPTH, MAX_MEMBERS, DEEP_DEPTH } from '../src/merkle.js';
-import { proveMembership, verifyMembership, artifactsReady, loadNullifierLedger, isNullifierSpent, appendNullifier, proveBalance, verifyBalance, artifactsReadyBalance, artifactsReadyDeep, artifactsReadyBalanceDeep, ARTIFACTS_DEEP, ARTIFACTS_BALANCE_DEEP, CIRCUIT, balanceReceipt } from '../src/zk.js';
+import { proveMembership, verifyMembership, artifactsReady, loadNullifierLedger, isNullifierSpent, appendNullifier, proveBalance, verifyBalance, artifactsReadyBalance, artifactsReadyDeep, artifactsReadyBalanceDeep, ARTIFACTS_DEEP, ARTIFACTS_BALANCE_DEEP, CIRCUIT, balanceReceipt, anonReceipt, membershipArtifactsFor, balanceArtifactsFor, artifactsReadyFor, circuitNameFor, parseCircuitName, vkeyPathForCircuit } from '../src/zk.js';
 import { kemKeygen, kemPublicFile, sealBytes, openEnvelope, envelopePublicInfo } from '../src/kem.js';
 
 const READY = artifactsReady();
 const READY_BAL = artifactsReadyBalance();
 const READY_DEEP = artifactsReadyDeep();
 const READY_BAL_DEEP = artifactsReadyBalanceDeep();
+const READY_D6_M = artifactsReadyFor('membership', 6);
+const READY_D6_B = artifactsReadyFor('balance', 6);
 
 test('merkle: ลำดับใบต่างกัน → รากต้องต่างกัน (canonical เสถียร)', async () => {
   const poseidon = await loadPoseidon();
@@ -266,3 +270,91 @@ test('v1.7 (Q-02): สายส่ง KEM ครบสาย — ใบพิส
   };
   assert.equal(await verifyBalance({ proof: opened.zkProof, publicSignals: signals10 }), true);
 });
+
+// ==== v2.2 (Q-04): ตัวกำเนิดวงจร + ชั้นเลือกโปรไฟล์ dynamic ตามความลึก D ====
+
+test('zk-v2.2: ชื่อวงจร ↔ โปรไฟล์ — circuitNameFor/parseCircuitName ตรงกันทุกรูป (รวมชื่อเดิม v1/d5)', () => {
+  assert.equal(circuitNameFor('membership', 4), 'membership_v1');
+  assert.equal(circuitNameFor('membership', 5), 'membership_d5_v1');
+  assert.equal(circuitNameFor('membership', 6), 'membership_d6_v1');
+  assert.equal(circuitNameFor('balance', 4), 'balance_v1');
+  assert.equal(circuitNameFor('balance', 6), 'balance_d6_v1');
+  // อ่านย้อน: ชื่อจากใบเดิมทุกรูป (v1.2/v1.5) ต้องออกเป็น { kind, depth } ตรงเป๊ะ
+  assert.deepEqual(parseCircuitName('membership_v1'), { kind: 'membership', depth: 4 });
+  assert.deepEqual(parseCircuitName('membership_d5_v1'), { kind: 'membership', depth: 5 });
+  assert.deepEqual(parseCircuitName('balance_d5_v1'), { kind: 'balance', depth: 5 });
+  assert.equal(parseCircuitName('unknown_v1'), null);
+  assert.equal(parseCircuitName('membership_v2'), null);
+  assert.equal(parseCircuitName(''), null);
+  // วงเวียนกลับ: ทุกชื่อที่ circuitNameFor ผลิต (D=4…12 ทั้งสองวงจร) ต้อง parse ย้อนได้ตรงเดิม
+  for (let d = 4; d <= 12; d++) {
+    for (const kind of ['membership', 'balance']) {
+      assert.deepEqual(parseCircuitName(circuitNameFor(kind, d)), { kind, depth: d });
+    }
+  }
+});
+
+test('zk-v2.2: ชั้นเลือกแฟ้มตาม D — รูปเดิม D=4/5 คงแฟ้มเดิมเป๊ะ · D=6 = ชุด _d6 ตาม precedent', () => {
+  assert.deepEqual(membershipArtifactsFor(4), { wasm: 'artifacts/membership.wasm', zkey: 'artifacts/membership.zkey', vkey: 'artifacts/membership_vkey.json' });
+  assert.deepEqual(membershipArtifactsFor(5), { wasm: 'artifacts/membership_d5.wasm', zkey: 'artifacts/membership_d5.zkey', vkey: 'artifacts/membership_d5_vkey.json' });
+  assert.deepEqual(balanceArtifactsFor(5), { wasm: 'artifacts/balance_d5.wasm', zkey: 'artifacts/balance_d5.zkey', vkey: 'artifacts/balance_d5_vkey.json' });
+  assert.equal(membershipArtifactsFor(6).zkey, 'artifacts/membership_d6.zkey');
+  assert.equal(balanceArtifactsFor(6).vkey, 'artifacts/balance_d6_vkey.json');
+  // vkeyPathForCircuit — เส้นทางเดียวกับที่ผู้ตรวจใช้จริง
+  assert.ok(vkeyPathForCircuit('membership_d6_v1').endsWith(nodePath.join('artifacts', 'membership_d6_vkey.json')));
+  assert.equal(vkeyPathForCircuit('foo_v1'), null);
+});
+
+test('zk-v2.2: ตัวกำเนิดวงจรพิสูจน์ย้อนผ่าน — generate D=5 ตรงแฟ้ม d5 ที่ commit ไว้ทุกบรรทัดโค้ด (ไบต์ตรง ไม่นับคอมเมนต์)', () => {
+  const r = spawnSync('node', ['scripts/gen-circuits.mjs', '--recheck'], { encoding: 'utf8' });
+  assert.equal(r.status, 0);
+  assert.match(String(r.stdout), /PASS membership/);
+  assert.match(String(r.stdout), /PASS balance/);
+});
+
+test('zk D=6 (Q-04): พิสูจน์สมาชิกจริงโปรไฟล์ 64 ช่อง → ตรวจผ่านด้วย vkey D=6 (เลือกจาก field circuit ในใบ)',
+  { skip: !READY_D6_M && 'ยังไม่มี artifacts D=6 (wasm/zkey/vkey) — รัน node scripts/build-depth.mjs 6' }, async () => {
+    const poseidon = await loadPoseidon();
+    const secrets = Array.from({ length: 12 }, () => newMemberSecret(randomBytes));
+    const c = secrets.map((s) => poseidon.leafOf(s));
+    const tree = buildTree(c, poseidon, { depth: 6 });
+    assert.equal(tree.depth, 6);
+    assert.equal(tree.levels[0].length, 64); // ความจุ 64 ช่อง
+    const path = pathFor(tree, 11);
+    const epoch = 20261115n;
+    const { proof, publicSignals } = await proveMembership({ secret: secrets[11], path, root: tree.root, epoch, artifacts: membershipArtifactsFor(6) });
+    const rec = anonReceipt({ proof, publicSignals, epoch, rootView: { members: secrets.length }, circuit: circuitNameFor('membership', 6) });
+    assert.equal(rec.circuit, 'membership_d6_v1');
+    // ฝั่งผู้ตรวจ: อ่าน field circuit จากใบ → เลือก vkey เอง (เส้นทางเดียวกับ cli zk verify)
+    assert.deepEqual(parseCircuitName(rec.circuit), { kind: 'membership', depth: 6 });
+    const ok = await verifyMembership({ proof: rec.zkProof, publicSignals, vkeyPath: vkeyPathForCircuit(rec.circuit) });
+    assert.equal(ok, true);
+    assert.equal(publicSignals.epochNonce, '20261115');
+  });
+
+test('zk-balance D=6 (Q-04): พิสูจน์ยอดจริงโปรไฟล์ 64 ใบ → ตรวจผ่านด้วย vkey D=6 · ยอดจริงไม่โผล่สาธารณะ',
+  { skip: !READY_D6_B && 'ยังไม่มี artifacts balance D=6 — รัน node scripts/build-depth.mjs 6' }, async () => {
+    const poseidon = await loadPoseidon();
+    const balances = [50_000n, 500_000n, 12_000_000n];
+    const blindings = balances.map(() => newMemberSecret(randomBytes));
+    const commitments = balances.map((b, i) => poseidon.balanceLeafOf(b, blindings[i]));
+    const tree = buildTree(commitments, poseidon, { depth: 6 });
+    const epoch = 20261115n;
+    const threshold = 100_000n;
+    const { proof, publicSignals } = await proveBalance({ balance: balances[2], blinding: blindings[2], path: pathFor(tree, 2), root: tree.root, epoch, threshold, artifacts: balanceArtifactsFor(6) });
+    assert.equal(publicSignals.threshold, '100000');
+    assert.ok(!Object.values(publicSignals).includes('12000000')); // ยอดจริงต้องไม่เทียบเตียงออกมา
+    const ok = await verifyBalance({ proof, publicSignals, vkeyPath: vkeyPathForCircuit('balance_d6_v1') });
+    assert.equal(ok, true);
+  });
+
+test('zk cross-depth D=6: ใบพิสูจน์ D=6 ตรวจด้วย vkey D=5 → ต้องปฏิเสธ (โปรไฟล์แยกกันอย่างเด็ดขาด)',
+  { skip: !READY_D6_M || !READY_DEEP ? 'ต้องมี artifacts ทั้ง D=6 และ D=5' : false }, async () => {
+    const poseidon = await loadPoseidon();
+    const secrets = [100n, 200n];
+    const c = secrets.map((s) => poseidon.leafOf(s));
+    const tree = buildTree(c, poseidon, { depth: 6 });
+    const { proof, publicSignals } = await proveMembership({ secret: secrets[1], path: pathFor(tree, 1), root: tree.root, epoch: 20261115n, artifacts: membershipArtifactsFor(6) });
+    const ok = await verifyMembership({ proof, publicSignals, vkeyPath: 'artifacts/membership_d5_vkey.json' });
+    assert.equal(ok, false);
+  });
