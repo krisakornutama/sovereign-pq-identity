@@ -6,6 +6,7 @@ import path from 'node:path';
 import { createIdentity, loadIdentity, publicView } from './src/identity.js';
 import { signReceipt, verifyReceipt } from './src/receipt.js';
 import { appendReceipt, listReceipts } from './src/ledger.js';
+import { buildAccountingExport, verifyAccountingExport, verifyAccountingSignatures, parseAccountingExport } from './src/accounting.js';
 import { createVault, openVault, vaultSummary } from './src/vault.js';
 import { readPassphrase, passphraseFromEnv } from './src/password.js';
 import { canonical, sha256Hex } from './src/util.js';
@@ -208,11 +209,53 @@ if (cmd === 'keygen') {
   showVerify(v);
   process.exitCode = v.valid ? 0 : 1;
 } else if (cmd === 'ledger') {
-  const all = listReceipts(LEDGER);
-  console.log(C.g(`คลังในเครื่องมี ${all.length} ใบ:`));
-  for (const e of all) {
-    const v = verifyReceipt(e);
-    console.log(`  ${C.b(e.id)}  ${new Date(e.issued_at).toLocaleString('th-TH')}  ฿${(e.payload?.total_thb ?? 0).toFixed(2)}  ${v.valid ? C.g('✓') : C.r('✗')}`);
+  const lsub = rest[0];
+  if (lsub === 'export') {
+    // เอกสารบัญชี v2.0 (Q-08) — คลังใบเสร็จ → แฟ้ม JSONL เสถียร + สาย hash ผูกหัวถึงท้าย
+    //   ฝังซองต้นฉบับเต็ม (ลายเซ็นครบ) — ส่วนบัญชี/ภาษีของ sovereign-origin ตรวจเองได้โดยไร้กุญแจ
+    const out = rest[1] || 'data/accounting-ledger.jsonl';
+    const all = listReceipts(LEDGER);
+    let lines;
+    try { lines = buildAccountingExport(all, { generator: 'sovereign-pq-identity', source: LEDGER }); }
+    catch (e) { console.error(C.r('✗ export ไม่สำเร็จ: ' + e.message)); process.exit(1); }
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    fs.writeFileSync(out, lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+    const head = lines[0], foot = lines[lines.length - 1];
+    console.log(C.g('✓ export เอกสารบัญชี ' + all.length + ' ใบ → ' + out + ' (' + fs.statSync(out).size.toLocaleString('en-US') + ' B)'));
+    console.log('  ยอดรวม: ' + (foot.total_thb === null ? C.y('ไม่รวมอัตโนมัติ — มีใบไร้ payload.total_thb (ปลายทางรวมเอง)') : '฿' + Number(foot.total_thb).toFixed(2)));
+    console.log('  ท้ายสาย: ' + C.b(foot.hash.slice(0, 16) + '…') + C.dim('  ·  แฟ้มไร้เวลาสร้างภายใน — คลังชุดเดิม export ซ้ำได้ไบต์ตรงกันเป๊ะ'));
+    console.log(C.y('  ✍ แฟ้มนี้พิสูจน์ได้ด้วยตัวเอง (ฝังซองลายเซ็นครบ) — ส่วนบัญชีตรวจเองได้: node cli.js ledger verify ' + out));
+  } else if (lsub === 'verify') {
+    const file = rest[1];
+    if (!file) { console.error(C.r('ใช้งาน: node cli.js ledger verify <แฟ้มเอกสารบัญชี.jsonl>')); process.exit(1); }
+    if (!fs.existsSync(file)) { console.error(C.r('ไม่พบแฟ้ม ' + file)); process.exit(1); }
+    let lines;
+    try { lines = parseAccountingExport(fs.readFileSync(file, 'utf8')); }
+    catch (e) { console.error(C.r('✗ ' + e.message)); process.exit(1); }
+    const v = verifyAccountingExport(lines);
+    const sigs = verifyAccountingSignatures(lines);
+    console.log((v.ok ? C.g('✓') : C.r('✗')) + ' เอกสารบัญชี ' + v.docs + ' ใบ · head ' + (v.head ? v.head.slice(0, 16) + '…' : '(ไม่มี)') + ' · ยอดรวม: ' + (v.total_thb === null ? C.y('ไม่รวมอัตโนมัติ') : '฿' + Number(v.total_thb).toFixed(2)));
+    for (const p of v.problems) console.error(C.r('    · ' + p));
+    const sigOk = sigs.checked.filter((s) => s.valid === true).length;
+    const sigBad = sigs.invalid.length;
+    if (sigs.checked.length) console.log((sigBad === 0 ? C.g('✓') : C.r('✗')) + ' ตรวจลายเซ็นซองฝังใหม่ (ไร้กุญแจ): ' + sigOk + '/' + sigs.checked.length + ' ใบผ่านครบทุกชั้นของโปรไฟล์');
+    for (const s of sigs.invalid) console.error(C.r('    · ใบที่ ' + s.seq + ' (' + s.receipt_id + ') ลายเซ็นไม่ผ่าน: ' + s.problems.join(' · ')));
+    // เทียบต้นทางเมื่อเครื่องนี้มีคลังใบเสร็จอยู่ด้วย
+    if (fs.existsSync(LEDGER)) {
+      const src = listReceipts(LEDGER);
+      const srcShas = new Set(src.map((e) => sha256Hex(canonical(e))));
+      const missing = lines.filter((l) => l.line === 'doc' && !srcShas.has(l.receipt_sha256)).length;
+      console.log(missing === 0 ? C.dim('    · ทุกใบในแฟ้มตรงต้นทาง (' + LEDGER + ' — แฟ้มต้นทางปัจจุบันของเครื่องนี้)') : C.y('    ⚠ มี ' + missing + ' ใบไม่พบในคลังต้นทางปัจจุบัน (คลังเปลี่ยนหลัง export — ตัวเอกสารยังตรงตามสาย)'));
+    }
+    process.exitCode = v.ok && sigBad === 0 ? 0 : 1;
+  } else {
+    const all = listReceipts(LEDGER);
+    console.log(C.g(`คลังในเครื่องมี ${all.length} ใบ:`));
+    for (const e of all) {
+      const v = verifyReceipt(e);
+      console.log(`  ${C.b(e.id)}  ${new Date(e.issued_at).toLocaleString('th-TH')}  ฿${(e.payload?.total_thb ?? 0).toFixed(2)}  ${v.valid ? C.g('✓') : C.r('✗')}`);
+    }
+    console.log(C.dim('  ต่อยอด: node cli.js ledger export [แฟ้มออก] — ทำเป็นเอกสารบัญชี (สาย hash + ลายเซ็นฝัง · v2.0)'));
   }
 } else if (cmd === 'vault') {
   const sub = rest[0] || 'help';
@@ -283,6 +326,8 @@ if (cmd === 'keygen') {
   node cli.js demo                          จำลองขาย → เซ็นตามโปรไฟล์ (สองชั้น หรือสามชั้นเมื่อ --slh) → ตรวจ → ลงคลัง
   node cli.js verify <แฟ้มใบเสร็จ.json>     ตรวจใบเสร็จ (exit 0 เมื่อผ่านครบทุกชั้น)
   node cli.js ledger                        อ่านคลังใบเสร็จในเครื่อง + ตรวจแต่ละใบ
+  node cli.js ledger export [แฟ้มออก]       คลัง → เอกสารบัญชี JSONL (สาย hash + ฝังซองลายเซ็นครบ · v2.0 · Q-08)
+  node cli.js ledger verify <แฟ้ม.jsonl>    ตรวจเอกสารบัญชีข้ามเครื่อง — สาย + ลายเซ็นทุกใบ (ไร้กุญแจ)
   node cli.js selftest                      ทดสอบตัวเอง 7 เคส (ข้อมูลสาธิตล้วน)
 
   หมุนเวียนกุญแจ:
