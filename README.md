@@ -838,6 +838,24 @@ node cli.js ledger verify data/accounting-ledger.jsonl   # ตรวจเอง
 
 ---
 
+### 🔎 หน้าตรวจใบเสร็จบนเว็บ static (v2.1) — ผู้รับสลิปตรวจเองได้ในเบราว์เซอร์ · ไม่ต้องติดตั้ง · แฟ้มไม่ออกจากเครื่อง
+
+เปิดหน้า **[verify.html](https://sovereignoriginshop.dpdns.org/verify.html)** (โค้ดอยู่ที่ [project-sovereign](https://github.com/krisakornutama/project-sovereign) — `verify.html` + `verify.js` + `pq-vendor/`) เลือกแฟ้มใบเสร็จ (`.json`) หรือแฟ้มเอกสารบัญชี (`.jsonl` จาก `ledger export`) — หน้าตรวจทีละชั้นบนเครื่องผู้ตรวจเอง:
+
+- **Ed25519** — ผ่าน WebCrypto ของเบราว์เซอร์ (import กุญแจสาธารณะรูป SPKI DER 44 B ตรงกับ `readEdPub` ฝั่ง Node เป๊ะ)
+- **ML-DSA-44 + SLH-DSA-128s** — `@noble/post-quantum` 0.7.1 pure JS ล้วน ฝังใน repo (`pq-vendor/` 14 แฟ้ม + import map — **ไร้ CDN ไร้ bundler ไร้บริการตรวจภายนอก**)
+- **แฟ้มบัญชี** — สาย hash ทีละบรรทัด + ลายเซ็นซองฝังทุกใบ + เทียบ `receipt_sha256` + จำนวนเอกสาร/ยอดรวมตรง
+- logic ตรวจ copy ตรงจาก src ของ repo นี้ (canonical / coreBytes / PQ_CONTEXT / โดเมนสายบัญชี) — ตรวจทุกบิตเดียวกับ `cli.js ledger verify`
+
+ผลทดสอบเบราว์เซอร์จริง (Chromium · ของทดสอบ = ใบเสร็จจริงเซ็นจริงจาก sandbox ของ repo นี้):
+
+- ใบจริงสองชั้น → ผ่านครบ (Ed25519 ✓ ML-DSA-44 ✓) · ใบจริงสามชั้น (SLH เซ็นจริง) → ผ่านครบทุกชั้น
+- ใบถูกแก้ payload (`total_thb` → 99999) → จับได้ทันที: ลายเซ็นทั้งสองชั้นพังพร้อมกัน แสดงสาเหตุชัด ("ลายเซ็นไม่ตรงข้อมูล")
+- แฟ้มบัญชี 3 ใบ (sandbox Q-08) → สายผ่าน · ลายเซ็นซองฝัง 3/3 ใบผ่านครบทุกชั้น · head `b2bfd966f600c934…` · ยอด ฿360 — ตรงตัวเลข sandbox Q-08 ทุกบิต
+- console ว่างไร้ error · เสิร์ฟแบบ PWA (sw v5 precache) — ปิดอินเทอร์เน็ตก็ตรวจได้เมื่อเปิดหน้าแล้วครั้งแรก
+
+---
+
 ## ✅ ผลการทดสอบจากเครื่องจริง
 
 ```
@@ -933,7 +951,7 @@ repo นี้คือ**ชั้นตรวจสอบอัตลักษ�
 |---|---|
 | 🏠 [`sovereign-origin`](https://github.com/krisakornutama/sovereign-origin) — **ระบบหลัก** | แอป desktop ประจำบ้าน (ขาย · บัญชี · ภาษี · ฟาร์ม) — อนาคตรับ ledger จาก repo นี้ไป export เป็นเอกสารทางบัญชี |
 | 🌿 [`sovereign-offgrid`](https://github.com/krisakornutama/sovereign-offgrid) | POS ออฟไลน์เซ็น Ed25519 แล้ววันนี้ — ไลบรารีของ repo นี้นำไป**อัปเกรดสลิปเป็นสองลายเซ็นตั้งแต่ต้นทาง**ได้เลย |
-| 📡 [`project-sovereign`](https://github.com/krisakornutama/project-sovereign) | เว็บสาธารณะ + ระบบหลังบ้าน self-hosted — โครงพื้นฐานที่เชื่อมทุก repo |
+| 📡 [`project-sovereign`](https://github.com/krisakornutama/project-sovereign) | เว็บสาธารณะ + ระบบหลังบ้าน self-hosted — โครงพื้นฐานที่เชื่อมทุก repo · **หน้าตรวจใบเสร็จโพสต์-ควอนตัม (`verify.html` · v2.1) ฝังอยู่ที่นี่** — ผู้รับสลิปตรวจเองได้ในเบราว์เซอร์ |
 | 🧠 [`sovereign-rule-engine`](https://github.com/krisakornutama/sovereign-rule-engine) | Rule engine Merkle + CRDT — ใช้ตัวตน/ลายเซ็นจาก repo นี้ตั้งกฎสิทธิ์ได้โดยตรง |
 
 ---
@@ -952,6 +970,7 @@ repo นี้คือ**ชั้นตรวจสอบอัตลักษ�
 | ✅ **v1.8 — บังเกตุจากเครื่องจริง** | **ซองสตรีมแบ่งส่วน (chunked envelope)** — `kem seal <ไฟล์> --stream [ขนาดชิ้น]` อ่านต้นทางรอบเดียว หน่วยความจำ = ขนาดชิ้น (64 KiB ค่าเริ่มต้น · ยอมรับ 256 B–4 MiB) · ซอง JSONL หัว/ชิ้น/ท้าย · สาย hash ผูกหัวถึงท้าย (โหนดขนส่งตรวจครบโดยไม่มีกุญแจ) · GCM AAD ผูกผู้รับ+ปริมาตรรวม+ดัชนี (ย้าย/สลับชิ้น = ปฏิเสธ) · เปิดแล้วเขียน atomic (`.part` → fsync → rename) · sandbox สลิป 64,000 บรรทัด 13,763,390 B → 53 ชิ้น: seal 278.9 ms / open 341.2 ms · sha256 ตรงต้นทางเป๊ะทุกไบต์ · 54/54 ทดสอบ | พร้อมใช้ |
 | ✅ **v1.9 — บังเกตุจากเครื่องจริง** | **พิธี Groth16 หลายเครื่องจริง (multi-party ceremony chain)** — CLI `zk ceremony init/challenge/contribute/merge/seal/verify` · แผ่นสายพิธี hash ผูกหัวถึงท้าย (`h_prev` + canonical — สอดแทรก/ตัดทอน/สลับ/แก้ชื่อ = จับได้) · ผู้ร่วมได้แค่แฟ้มท้าทาย (ไม่ต้องมีวงจร/กุญแจ) · merge ตรวจบัตร `--expect-sha` ก่อน import · seal เฉพาะ "ZKey Ok!" + ประกาศ `artifacts/ceremony-multiparty.json` (ฝังสายเต็ม — ตรวจข้ามเครื่องไร้แฟ้ม zkey) · entropy สุ่มในหน่วยความจำห้ามบันทึก · sandbox 3 เครื่องผ่านครบ 90.2 s · 60/60 ทดสอบ | พร้อมใช้ |
 | ✅ **v2.0 — บังเกตุจากเครื่องจริง** | **ตัวเชื่อม ledger → เอกสารบัญชี** — CLI `ledger export/verify` · แฟ้ม JSONL เสถียร (ไร้เวลาสร้าง — export ซ้ำไบต์ตรงกันเป๊ะ) · สาย hash ผูกหัวถึงท้ายทุกบรรทัด (แก้ payload/ตัดใบ/สลับลำดับ/แก้ยอดรวม = จับได้) · ฝังซองต้นฉบับเต็ม (`receipt` + `receipt_sha256`) — ปลายทางตรวจลายเซ็นใหม่ได้เองไร้กุญแจ · ยอดรวมตามกฎ "ไม่เดา" · sandbox 2 โหนดผ่านครบ 11.6 s (ฝ่ายบัญชีไร้กุญแจตรวจเอง + ทดสอบลบ) · 66/66 ทดสอบ | พร้อมใช้ |
+| ✅ **v2.1 — บังเกตุจากเครื่องจริง** | **หน้าตรวจใบเสร็จบนเว็บ static (Q-10)** — `verify.html` บน project-sovereign (เว็บสาธารณะ GitHub Pages) ตรวจใบเสร็จ + แฟ้มบัญชีในเบราว์เซอร์ผู้รับสลิป: Ed25519 ผ่าน WebCrypto (SPKI ตรงกันทุกบิตกับฝั่ง Node) · ML-DSA-44/SLH-DSA ผ่าน @noble vendor pure JS ฝังใน repo (`pq-vendor/` 14 แฟ้ม + import map ไร้ CDN) · สาย hash + ลายเซ็นซองฝังทุกใบ + `receipt_sha256` + ยอดรวม · ทดสอบเบราว์เซอร์จริงครบ (ใบจริง 2/3 ชั้นผ่าน · ใบแก้จับได้ · แฟ้มบัญชี 3/3 ใบผ่าน head ตรง sandbox Q-08 เป๊ะ · console ว่าง) | พร้อมใช้ |
 | 🧩 **เฟสถัดไป** | Falcon (FIPS 206 / FN-DSA) เมื่อ finalize — คงพับตามนโยบาย "หยิบที่จบมาใช้ก่อน" (NIST ยืนยัน 27 ต.ค. 2026: FIPS 206 ยังเป็น "selected for ongoing standardization") | วางแผน |
 
 ---
