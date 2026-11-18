@@ -222,6 +222,36 @@ $ node cli.js vault remove-plain
 
 ---
 
+## 🗝️ OS Keychain Integration (Q-06) — เก็บ passphrase ใน Credential Store ของระบบปฏิบัติการ
+
+แทนการพิมพ์ passphrase ทุกครั้งหรือใส่ใน environment variable ให้เก็บใน **Windows Credential Manager / macOS Keychain Access / Linux Secret Service** ผ่าน `keytar` — คลัง vault ยังคง Argon2id + AES-256-GCM เดิมทุกอย่าง ไม่มีการเปลี่ยนรูปแบบแฟ้ม
+
+```bash
+# จัดการ passphrase ใน OS keychain
+node cli.js keychain list                           # แสดงสถานะทุกประเภท
+node cli.js keychain set identity                   # เก็บ passphrase identity (จะถาม prompt)
+node cli.js keychain set membership "pass123456"    # เก็บพร้อมระบุค่าเลย
+node cli.js keychain get identity                   # อ่าน/ยืนยันว่ามีอยู่
+node cli.js keychain delete balance                 # ลบออกจาก keychain
+node cli.js keychain clear                          # ล้างทั้งหมดของแอปนี้
+
+# ใช้งานร่วมกับคำสั่งอื่น: เพิ่มธง --keychain
+node cli.js zk enroll "สมาชิก" --keychain
+node cli.js zk prove "สมาชิก" --keychain
+node cli.js zk issue "ใบยอด" 10000000 --keychain
+node cli.js zk prove-bal "ใบยอด" 10000000 --keychain
+node cli.js vault open --keychain
+node cli.js kem keygen "ชื่อ" --keychain
+node cli.js kem open file.seal.json --keychain
+
+# Automation: ลำดับความสำคัญของ passphrase (ต่ำ → สูง)
+# 1) OS Keychain (--keychain) → 2) Environment SOVEREIGN_*_PASS → 3) Interactive prompt
+```
+
+**หลักการทำงาน:** คำสั่งที่รองรับ `--keychain` จะลองอ่านจาก Credential Store ก่อน → ถ้าไม่มี/ระบบไม่รองรับ → ตกมาลง `SOVEREIGN_*_PASS` env → สุดท้ายถึงถามผู้ใช้ → ผู้ใช้เดสก์ท็อป (sovereign-origin) ล็อกอิน OS แล้วใช้ vault ต่อได้ทันทีโดยไม่ต้องพิมพ์ passphrase ซ้ำ
+
+---
+
 ## 🕶️ ZK-SNARK Anonymous Proof (v1.2) — พิสูจน์ว่าเป็นสมาชิก โดยไม่บอกว่าใคร
 
 รุ่น v1.2 เพิ่มระดับที่ลายเซ็นธรรมดาทำไม่ได้: ยืนยันต่อ POS/ผู้ตรวจว่า **"ผู้ถือสิทธิ์อยู่ในกลุ่มสมาชิกที่ลงทะเบียนไว้"** — โดยไม่เปิดเผยกุญแจ ไม่เปิดเผยตำแหน่งในต้นไม้สมาชิก และไม่เกิดการใช้สิทธิ์ซ้ำ

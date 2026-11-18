@@ -8,7 +8,7 @@ import { signReceipt, verifyReceipt } from './src/receipt.js';
 import { appendReceipt, listReceipts } from './src/ledger.js';
 import { buildAccountingExport, verifyAccountingExport, verifyAccountingSignatures, parseAccountingExport } from './src/accounting.js';
 import { createVault, openVault, vaultSummary } from './src/vault.js';
-import { readPassphrase, passphraseFromEnv } from './src/password.js';
+import { readPassphrase, passphraseFromEnv, storePassphraseInKeychain, deletePassphraseFromKeychain, listKeychainPassphrases, isKeychainAvailable } from './src/password.js';
 import { canonical, sha256Hex } from './src/util.js';
 import { loadPoseidon, buildTree, pathFor, newMemberSecret, MERKLE_DEPTH, DEEP_DEPTH, capacityFromRootFile, depthFromRootFile } from './src/merkle.js';
 import { proveMembership, verifyMembership, anonReceipt, loadNullifierLedger, isNullifierSpent, appendNullifier, proveBalance, verifyBalance, balanceReceipt, membershipArtifactsFor, balanceArtifactsFor, artifactsReadyFor, circuitNameFor, parseCircuitName, vkeyPathForCircuit } from './src/zk.js';
@@ -65,21 +65,21 @@ function sealFileTo(file, pubPath) {
 
 const [cmd, ...rest] = process.argv.slice(2);
 
-async function getPassphrase(confirm = false) {
+async function getPassphrase(confirm = false, { useKeychain = false, vaultType = 'identity' } = {}) {
   if (passphraseFromEnv()) return passphraseFromEnv();
-  const p1 = await readPassphrase('  ตั้ง passphrase (ต่ำสุด 8 ตัว): ');
+  const p1 = await readPassphrase('  ตั้ง passphrase (ต่ำสุด 8 ตัว): ', { useKeychain, vaultType });
   if (p1.length < 8) { console.error(C.r('  ✗ passphrase สั้นเกินไป')); process.exit(1); }
   if (confirm) {
-    const p2 = await readPassphrase('  พิมพ์ซ้ำอีกครั้ง: ');
+    const p2 = await readPassphrase('  พิมพ์ซ้ำอีกครั้ง: ', { useKeychain, vaultType });
     if (p1 !== p2) { console.error(C.r('  ✗ สองรอบไม่ตรงกัน — ยกเลิก ไม่ได้เขียนแฟ้มใด ๆ')); process.exit(1); }
   }
   return p1;
 }
 
-async function openVaultFile() {
+async function openVaultFile({ useKeychain = false, vaultType = 'identity' } = {}) {
   if (!fs.existsSync(VAULT)) return null;
   let passphrase = passphraseFromEnv();
-  if (!passphrase) passphrase = await readPassphrase('  passphrase ของ vault: ');
+  if (!passphrase) passphrase = await readPassphrase('  passphrase ของ vault: ', { useKeychain, vaultType });
   try {
     const identity = openVault(JSON.parse(fs.readFileSync(VAULT, 'utf8')), passphrase);
     return loadIdentity(identity);
@@ -270,7 +270,8 @@ if (cmd === 'keygen') {
     console.log(C.g('✓ เตรียมเสร็จ: vault ' + VAULT + ' ตรวจเปิดกลับผ่าน'));
     console.log(C.y('  ✍ ต่อไป: ลบแฟ้ม plaintext เอง หรือ run: node cli.js vault remove-plain'));
   } else if (sub === 'open') {
-    const id = await openVaultFile();
+    const useKeychain = rest.includes('--keychain');
+    const id = await openVaultFile({ useKeychain, vaultType: 'identity' });
     if (!id) { console.error(C.r('ยังไม่มี vault — รัน keygen หรือ vault create ก่อน')); process.exit(1); }
     console.log(C.g('✓ เปิด vault ได้จริง (กุญแจอยู่ในหน่วยความจำเฉพาะกระบวนการนี้)'));
     console.log('  ตัวตน : ' + C.b(id.id) + '  ·  KDF: ' + vaultSummary(JSON.parse(fs.readFileSync(VAULT, 'utf8'))).kdf);
@@ -285,8 +286,74 @@ if (cmd === 'keygen') {
     console.log([
       'คำสั่ง vault:',
       '  node cli.js vault create      ย้ายกุญแจจากแฟ้ม plaintext → vault เข้ารหัส',
-      '  node cli.js vault open        ทดสอบว่า vault เปิดได้ด้วย passphrase จริง',
+      '  node cli.js vault open [--keychain]  ทดสอบว่า vault เปิดได้ด้วย passphrase จริง (--keychain = ใช้ OS Credential Store)',
       '  node cli.js vault remove-plain ลบแฟ้ม plaintext หลัง vault พร้อม',
+    ].join('\n'));
+  }
+} else if (cmd === 'keychain') {
+  const sub = rest[0] || 'help';
+  if (sub === 'set') {
+    const vaultType = rest[1];
+    if (!vaultType || !['identity', 'membership', 'balance', 'kem'].includes(vaultType)) {
+      console.error(C.r('ใช้งาน: node cli.js keychain set <identity|membership|balance|kem> [passphrase]'));
+      process.exit(1);
+    }
+    let passphrase = rest[2];
+    if (!passphrase) passphrase = await readPassphrase('  passphrase ที่จะเก็บ: ');
+    if (passphrase.length < 8) { console.error(C.r('  ✗ passphrase สั้นเกินไป (ต่ำสุด 8 ตัว)')); process.exit(1); }
+    await storePassphraseInKeychain(vaultType, passphrase);
+    console.log(C.g('✓ เก็บ passphrase ' + vaultType + ' ลง OS keychain แล้ว'));
+  } else if (sub === 'get') {
+    const vaultType = rest[1];
+    if (!vaultType || !['identity', 'membership', 'balance', 'kem'].includes(vaultType)) {
+      console.error(C.r('ใช้งาน: node cli.js keychain get <identity|membership|balance|kem>'));
+      process.exit(1);
+    }
+    const passphrase = await getPassphrase(vaultType);
+    if (passphrase) {
+      console.log(C.g('พบ passphrase ใน keychain: ' + passphrase.slice(0, 4) + '****'));
+    } else {
+      console.log(C.y('ไม่พบ passphrase ' + vaultType + ' ใน keychain'));
+    }
+  } else if (sub === 'delete') {
+    const vaultType = rest[1];
+    if (!vaultType || !['identity', 'membership', 'balance', 'kem'].includes(vaultType)) {
+      console.error(C.r('ใช้งาน: node cli.js keychain delete <identity|membership|balance|kem>'));
+      process.exit(1);
+    }
+    const ok = await deletePassphraseFromKeychain(vaultType);
+    if (ok) console.log(C.g('✓ ลบ passphrase ' + vaultType + ' จาก keychain แล้ว'));
+    else console.log(C.y('ไม่พบ passphrase ' + vaultType + ' ใน keychain'));
+  } else if (sub === 'list') {
+    const stored = await listKeychainPassphrases();
+    console.log(C.g('Passphrase ใน OS keychain:'));
+    for (const [type, has] of Object.entries(stored)) {
+      console.log('  ' + type + ': ' + (has ? C.g('✓ เก็บอยู่') : C.dim('— ว่าง')));
+    }
+    const available = await isKeychainAvailable();
+    console.log('\n  ระบบ keychain: ' + (available ? C.g('พร้อมใช้งาน') : C.r('ไม่รองรับบนระบบนี้')));
+  } else if (sub === 'clear') {
+    await clearAllPassphrases();
+    console.log(C.g('✓ ล้าง passphrase ทั้งหมดของ sovereign-pq-identity แล้ว'));
+  } else {
+    console.log([
+      'คำสั่ง keychain (Q-06 — OS Credential Store):',
+      '  node cli.js keychain set <type> [passphrase]    เก็บ passphrase ลง Credential Store (Windows/macOS/Linux)',
+      '  node cli.js keychain get <type>                 อ่าน/แสดง passphrase ที่เก็บอยู่',
+      '  node cli.js keychain delete <type>              ลบ passphrase ออกจาก Credential Store',
+      '  node cli.js keychain list                       แสดงสถานะ passphrase ทุกประเภท',
+      '  node cli.js keychain clear                      ล้าง passphrase ทั้งหมดของแอปนี้',
+      '',
+      '  <type>: identity | membership | balance | kem  (ตรงกับ vault แต่ละอัน)',
+      '',
+      'การใช้งานร่วมกับ CLI อื่น: เพิ่มธง --keychain เช่น',
+      '  node cli.js zk enroll "สมาชิก" --keychain',
+      '  node cli.js zk prove "สมาชิก" --keychain',
+      '  node cli.js zk issue "ใบยอด" 10000000 --keychain',
+      '  node cli.js zk prove-bal "ใบยอด" 10000000 --keychain',
+      '  node cli.js kem keygen "ชื่อ" --keychain',
+      '  node cli.js kem open file.seal.json --keychain',
+      '  node cli.js vault open --keychain',
     ].join('\n'));
   }
 } else if (cmd === 'zk') {
@@ -386,9 +453,9 @@ async function zkNamespace(rest) {
   const writeMembersPublic = (arr) => { fs.mkdirSync('data', { recursive: true }); fs.writeFileSync(MEMBERS, JSON.stringify(arr, null, 2)); };
 
   // เปิด vault สมาชิก — คืน { data, passphrase } เพื่อใช้ passphrase เดิมบันทึกต่อได้ทันที (จะถามแค่ครั้งเดียว)
-  const openMemberVault = async (needCreate) => {
+  const openMemberVault = async (needCreate, { useKeychain = false } = {}) => {
     let passphrase = process.env.SOVEREIGN_MEMBER_PASS || '';
-    if (!passphrase) passphrase = await readPassphrase(needCreate ? '  ตั้ง passphrase สมาชิก (ต่ำสุด 8 ตัว): ' : '  passphrase สมาชิก: ');
+    if (!passphrase) passphrase = await readPassphrase(needCreate ? '  ตั้ง passphrase สมาชิก (ต่ำสุด 8 ตัว): ' : '  passphrase สมาชิก: ', { useKeychain, vaultType: 'membership' });
     if (needCreate && passphrase.length < 8) { console.error(C.r('  ✗ passphrase สั้นเกินไป (ต่ำสุด 8 ตัว)')); process.exit(1); }
     if (needCreate && !fs.existsSync(MVAULT)) {
       fs.mkdirSync('data', { recursive: true });
@@ -407,8 +474,8 @@ async function zkNamespace(rest) {
   };
 
   // ดึงกุญแจลับของสมาชิกตามชื่อเรียก — จาก vault เข้ารหัสเท่านั้น ไม่มีทางอื่น
-  const openMemberByLabel = async (label) => {
-    const { data } = await openMemberVault(false);
+  const openMemberByLabel = async (label, { useKeychain = false } = {}) => {
+    const { data } = await openMemberVault(false, { useKeychain });
     const member = data.members.find((m) => m.label === label);
     if (!member || !member.secret) { console.error(C.r('ไม่พบกุญแจของสมาชิก "' + label + '" ใน ' + MVAULT + ' — รัน node cli.js zk enroll ก่อน')); process.exit(1); }
     return member;
@@ -424,9 +491,9 @@ async function zkNamespace(rest) {
   const readIssuedPublic = () => (fs.existsSync(ISSUED) ? JSON.parse(fs.readFileSync(ISSUED, 'utf8')) : []);
   const writeIssuedPublic = (arr) => { fs.mkdirSync('data', { recursive: true }); fs.writeFileSync(ISSUED, JSON.stringify(arr, null, 2)); };
 
-  const openBalanceVault = async (needCreate) => {
+  const openBalanceVault = async (needCreate, { useKeychain = false } = {}) => {
     let passphrase = process.env.SOVEREIGN_BALANCE_PASS || '';
-    if (!passphrase) passphrase = await readPassphrase(needCreate ? '  ตั้ง passphrase คลังใบยอด (ต่ำสุด 8 ตัว): ' : '  passphrase คลังใบยอด: ');
+    if (!passphrase) passphrase = await readPassphrase(needCreate ? '  ตั้ง passphrase คลังใบยอด (ต่ำสุด 8 ตัว): ' : '  passphrase คลังใบยอด: ', { useKeychain, vaultType: 'balance' });
     if (needCreate && passphrase.length < 8) { console.error(C.r('  ✗ passphrase สั้นเกินไป (ต่ำสุด 8 ตัว)')); process.exit(1); }
     if (needCreate && !fs.existsSync(BVAULT)) {
       fs.mkdirSync('data', { recursive: true });
@@ -467,7 +534,8 @@ async function zkNamespace(rest) {
 
   if (sub === 'enroll') {
     const label = rest[1] || '';
-    if (!label) { console.error(C.r('ใช้งาน: node cli.js zk enroll "ชื่อสมาชิก"')); process.exit(1); }
+    if (!label) { console.error(C.r('ใช้งาน: node cli.js zk enroll "ชื่อสมาชิก" [--keychain]')); process.exit(1); }
+    const useKeychain = rest.includes('--keychain');
     const pub = readMembersPublic();
     if (pub.some((m) => m.label === label)) { console.error(C.r('ชื่อสมาชิก "' + label + '" ลงทะเบียนแล้ว')); process.exit(1); }
     const maxDepth = maxReadyDepth('membership');
@@ -476,7 +544,7 @@ async function zkNamespace(rest) {
     const needBe = pub.length + 1;
     if (needBe > MAX_CAPACITY) { console.error(C.r('สมาชิกเต็มความจุสูงสุด (' + MAX_CAPACITY + ' คน — โปรไฟล์ D=' + maxDepth + ') · ออกโปรไฟล์ลึกกว่าได้: node scripts/build-depth.mjs <D>')); process.exit(1); }
 
-    const { data: vaultData, passphrase } = await openMemberVault(createNew);
+    const { data: vaultData, passphrase } = await openMemberVault(createNew, { useKeychain });
     // กุญแจลับ 31 ไบต์ (< BN254 p) — ถูกเก็บใน vault เข้ารหัสแบบเดียวกับกุญแจตัวตน
     const secretBig = newMemberSecret(randomBytes);
     const poseidon = await loadPoseidon();
@@ -531,7 +599,7 @@ async function zkNamespace(rest) {
     if (!artifactsOk) { console.error(C.r('ยังไม่มีแฟ้มวงจร D=' + depth + ' ใน artifacts/ — สร้างด้วย: node scripts/build-depth.mjs ' + depth + ' (ดู README หัวข้อ "ตัวกำเนิดวงจร")')); process.exit(1); }
     const idx = pub.findIndex((m) => m.label === label);
     if (idx < 0) { console.error(C.r('ไม่พบสมาชิก "' + label + '" — รัน node cli.js zk list ดูชื่อที่ลงทะเบียนไว้')); process.exit(1); }
-    const member = await openMemberByLabel(label);
+    const member = await openMemberByLabel(label, { useKeychain });
     const secretBig = BigInt('0x' + member.secret);
     const poseidon = await loadPoseidon();
     // กันคลาดเคลื่อนระหว่าง vault กับทะเบียน: กุญแจต้องแฮชออกมาตรง commitment ที่ประกาศไว้เสมอ
@@ -600,14 +668,15 @@ async function zkNamespace(rest) {
     // ออกใบยอด — ยอดจริงถูกเก็บใน vault เข้ารหัสเท่านั้น; ทะเบียนสาธารณะมีแต่ commitment
     const label = rest[1] || '';
     const amountStr = rest[2] || '';
-    if (!label || !amountStr) { console.error(C.r('ใช้งาน: node cli.js zk issue "ชื่อ" <ยอดเป็นสตางค์>')); process.exit(1); }
+    if (!label || !amountStr) { console.error(C.r('ใช้งาน: node cli.js zk issue "ชื่อ" <ยอดเป็นสตางค์> [--keychain]')); process.exit(1); }
     let amountBig;
     try { amountBig = BigInt(amountStr); } catch { console.error(C.r('ยอดต้องเป็นจำนวนเต็ม (สตางค์)')); process.exit(1); }
     if (amountBig < 1n || amountBig > BAL_MAX) { console.error(C.r('ยอดต้องอยู่ในช่วงจำนวนเต็ม 64 บิต (1 … 18,446,744,073,709,551,615 สตางค์)')); process.exit(1); }
+    const useKeychain = rest.includes('--keychain');
     const maxDepth = maxReadyDepth('balance');
     const MAX_CAPACITY = 2 ** maxDepth; // ความจุของโปรไฟล์ที่แฟ้มวงจร balance พร้อมจริง
     const createNew = !fs.existsSync(BVAULT);
-    const { data: balVault, passphrase } = await openBalanceVault(createNew);
+    const { data: balVault, passphrase } = await openBalanceVault(createNew, { useKeychain });
     if (balVault.balances.some((b) => b.label === label)) { console.error(C.r('ใบยอด "' + label + '" มีอยู่แล้ว — ใบใหม่ใช้ชื่อเรียกต่างกัน')); process.exit(1); }
     if (balVault.balances.length + 1 > MAX_CAPACITY) { console.error(C.r('ใบยอดเต็มความจุสูงสุด (' + MAX_CAPACITY + ' ใบ)')); process.exit(1); }
     const poseidon = await loadPoseidon();
@@ -663,10 +732,11 @@ async function zkNamespace(rest) {
     const rootFile = JSON.parse(fs.readFileSync(BROOT, 'utf8'));
     const depth = depthFromRootFile(rootFile);
     const capacity = capacityFromRootFile(rootFile);
+    const useKeychain = bRest.includes('--keychain');
     const artifactsOk = artifactsReadyFor('balance', depth);
     if (!artifactsOk) { console.error(C.r('ยังไม่มีแฟ้มวงจร balance D=' + depth + ' ใน artifacts/ — สร้างด้วย: node scripts/build-depth.mjs ' + depth + ' (ดู README หัวข้อ "ตัวกำเนิดวงจร")')); process.exit(1); }
     const pub = readIssuedPublic();
-    const { data: balVault } = await openBalanceVault(false);
+    const { data: balVault } = await openBalanceVault(false, { useKeychain });
     const card = balVault.balances.find((b) => b.label === label);
     if (!card) { console.error(C.r('ไม่พบใบยอด "' + label + '" ใน ' + BVAULT + ' — รัน node cli.js zk issue ก่อน')); process.exit(1); }
     const balanceBig = BigInt(card.balance);
@@ -971,9 +1041,9 @@ async function zkNamespace(rest) {
 async function kemNamespace(rest) {
   const sub = rest[0] || 'help';
 
-  const askKemPassphrase = async (needCreate) => {
+  const askKemPassphrase = async (needCreate, { useKeychain = false } = {}) => {
     let passphrase = process.env.SOVEREIGN_KEM_PASS || '';
-    if (!passphrase) passphrase = await readPassphrase(needCreate ? '  ตั้ง passphrase กุญแจ KEM (ต่ำสุด 8 ตัว): ' : '  passphrase กุญแจ KEM: ');
+    if (!passphrase) passphrase = await readPassphrase(needCreate ? '  ตั้ง passphrase กุญแจ KEM (ต่ำสุด 8 ตัว): ' : '  passphrase กุญแจ KEM: ', { useKeychain, vaultType: 'kem' });
     if (needCreate && passphrase.length < 8) { console.error(C.r('  ✗ passphrase สั้นเกินไป (ต่ำสุด 8 ตัว)')); process.exit(1); }
     return passphrase;
   };
@@ -1064,7 +1134,8 @@ async function kemNamespace(rest) {
       console.log(C.y('  ⚠ แฟ้มปลายทางอยู่แล้ว (' + out + ') — เขียนทับด้วยเนื้อหาจากซอง'));
     }
     let passphrase = process.env.SOVEREIGN_KEM_PASS || '';
-    if (!passphrase) passphrase = await readPassphrase('  passphrase กุญแจ KEM: ');
+    const useKeychain = rest.includes('--keychain');
+    if (!passphrase) passphrase = await readPassphrase('  passphrase กุญแจ KEM: ', { useKeychain, vaultType: 'kem' });
     let kemVault;
     try {
       kemVault = openVault(JSON.parse(fs.readFileSync(KVAULT, 'utf8')), passphrase);

@@ -33,7 +33,7 @@
 | Q-03 | **พิธี Groth16 ต่างเครื่องจริง** — ต่อยอด `scripts/ceremony.mjs` (v1.5 รองรับโครงสายอยู่แล้ว) เป็นขั้นตอน CLI ระหว่างผู้ร่วม: ส่งแฟ้ม zkey ต่อกันเป็นสาย + ตรวจ hash ทุก contribution จากแฟ้มพิธี | ทำให้ trusted setup ไม่ผูกกับเครื่องเดียว — กลุ่มพันธมิตรของ **sovereign-origin** ร่วมพิธีได้จริงหลายเครื่อง | ✅ ปิด (เหตุการณ์ 15 พ.ย. 2026 — ดูบันทึกชั้น 3️⃣) |
 | Q-04 | **โปรไฟล์ลึกต่อยอด D>5 — ตัวกำเนิดวงจรแบบพารามิเตอร์** — สคริปต์สร้าง `.circom` สำหรับ D=6/7/8 อัตโนมัติ + ชั้นเลือก vkey ตาม depth แบบ dynamic (ต้นแลกเปลี่ยน: zkey โต ~30% ต่อระดับ) | เปิดความจุกลุ่ม 64/128 ช่องเมื่อธุรกิจโต — ตรงกับ **sovereign-origin** ที่มีระบบแฟร์/กลุ่มซื้อขยายตัว | ✅ ปิด (เหตุการณ์ 15 พ.ย. 2026 — ดูบันทึกชั้น 3️⃣) |
 | Q-05 | **เร่ง SLH-DSA ด้วย WASM** — เซ็นชั้นที่ 3 ปัจจุบัน ~22 วิ/ใบ (JS ล้วน) → สลับมาใช้เวอร์ชัน WASM (API รูปเดิม) เพื่อลดเวลาเซ็น | สลิปของ **sovereign-origin** ใช้ 3 ชั้นได้ไวขึ้นทันทีในหน้างานจริง | ⬜ วางแผน (ประกาศไว้ใน README ตั้ง v1.4) |
-| Q-06 | **OS keychain — เก็บ passphrase หน้าสุดท้ายบนระบบ** — เชื่อมกุญแจถอด vault เข้า Windows Credential Storage / macOS Keychain (ไม่แตะรูปแบบ vault · คง AES-256-GCM และ Argon2id เดิมทุกอย่าง) | ผู้ใช้ **sovereign-origin** แบบ desktop ล็อกอิน OS แล้วใช้ vault ต่อได้โดยยังกรอกด้วยมือได้เหมือนเดิม | ⬜ วางแผน |
+| Q-06 | **OS keychain — เก็บ passphrase หน้าสุดท้ายบนระบบ** — เชื่อมกุญแจถอด vault เข้า Windows Credential Storage / macOS Keychain (ไม่แตะรูปแบบ vault · คง AES-256-GCM และ Argon2id เดิมทุกอย่าง) | ผู้ใช้ **sovereign-origin** แบบ desktop ล็อกอิน OS แล้วใช้ vault ต่อได้โดยยังกรอกด้วยมือได้เหมือนเดิม | ✅ ปิด (เหตุการณ์ 18 พ.ย. 2026 — ดูบันทึกชั้น 3️⃣) |
 | Q-07 | **Falcon (FIPS 206 / FN-DSA) ชั้นลายเซ็นเสริม** — ยังไม่ finalize (NIST ยืนยัน 27 ต.ค. 2026); จึงยังไม่เปิดใช้ ตามนโยบาย "หยิบแบบที่จบมาใช้ก่อน" — เฝ้าติดตาม NIST ทุก release ก่อนลงมือ | ลายเซ็นขนาดจิ๋ว (~666 B) เหมาะสลิปผ่าน QR/ช่องจำกัดขนาดของ **sovereign-offgrid** | ⬜ วางแผน (รอ FIPS 206) |
 | Q-08 | **ตัวเชื่อม ledger → เอกสารบัญชี** — export คลังใบเสร็จของ repo นี้เป็นรูปที่ **ระบบหลัก sovereign-origin** นำไปเป็นเอกสารบัญชี/ภาษีได้โดยตรง (โครง JSONL เสถียร + hash chain) | หัวใจส่วนบัญชี/ภาษีของ **sovereign-origin** — ชั้นบัญชีได้ข้ออ้างที่พิสูจน์ได้ โดยตัวตนไม่ถูกเปิดเผย | ✅ ปิด (เหตุการณ์ 15 พ.ย. 2026 — ดูบันทึกชั้น 3️⃣) |
 | Q-09 | **sovereign-offgrid POS แนบใบเสร็จตั้งแต่ต้นทาง** — ทดลองใช้ไลบรารีนี้ใน POS ออฟไลน์ให้สลิปโดนลายเซ็น Ed25519+ML-DSA ตั้งแต่ที่ขาย | **sovereign-offgrid** สลิปตอนขายออฟไลน์ + sync เข้า **sovereign-origin** เป็นระบบสองชั้นที่ตรวจใหม่ได้ | ✅ ปิด (เหตุการณ์ 15 พ.ย. 2026 — ดูบันทึกชั้น 3️⃣) |
@@ -130,6 +130,16 @@
   - **README**: เพิ่มหัวข้อ "ตัวกำเนิดวงจร v2.2" + โรดแม็ป + ตัวเลขจริง (ขนาด/เวลา D=6) + badge 72 passing
   - **ตรวจตามกฎ:** `sovereign-origin` (ส่วน A) สถานะสะอาด (git status ว่าง) · ไร้ secret/entropy/passphrase หลุดลง diff · แฟ้ม D=4/D=5 ที่ commit ไว้ไม่ถูกแตะ · artifacts D=6 ใน repo (~2 MB/วงจรตามกฎ) · build/ .tools/ data/ gitignored ทั้งชั้น
   - **ปลายทางต่อยอด:** กลุ่มที่ใหญ่ขึ้น (64/128 ช่อง) สร้างได้ด้วยคำสั่งเดียว — ใบเก่าทุกรูป (membership_v1 · membership_d5_v1 · balance_v1 · balance_d5_v1) ตรวจด้วย vkey เดิมตลอด — เส้นทางเดียวกับ **sovereign-origin** ที่โครงรองรับ D เตรียมไว้แล้ว (depthFromRootFile 1-12) · คิวถัดไป: ดูตาราง Q (ชั้น 2️⃣)
+
+- [2026-11-18] **Q-06 ปิดแล้ว — OS Keychain Integration (Windows Credential Manager / macOS Keychain / Linux Secret Service)**:
+  - **โมดูลใหม่ `src/keychain.js`**: wrapper `keytar` รองรับ identity/membership/balance/kem — `setPassphrase` `getPassphrase` `deletePassphrase` `listStoredPassphrases` `clearAllPassphrases` · `isKeychainAvailable()` ตรวจระบบรองรับ
+  - **อัปเดต `src/password.js`**: `readPassphrase(prompt, {useKeychain, vaultType})` เรียงลำดับความสำคัญ: **1) OS Keychain (--keychain)** → **2) Environment SOVEREIGN_*_PASS** → **3) Interactive prompt** · คง `passphraseFromEnv()` เดิม
+  - **CLI `keychain` subcommand**: `set` `get` `delete` `list` `clear` พร้อม help ครบ · `--keychain` flag รองรับ: `zk enroll/prove` `zk issue/prove-bal` `vault open` `kem keygen/open`
+  - **Dependency**: `keytar@7.9.0` (native addon · prebuild มี Windows/macOS/Linux) · npm allow-scripts ครอบคลุมแล้ว
+  - **เทส**: `npm test` = 72/72 ผ่าน (ไม่มี regression) · bump **2.2.0 → 2.3.0**
+  - **README**: เพิ่มหัวข้อ "OS Keychain Integration (Q-06)" + ตัวอย่างคำสั่งครบ + ตารางลำดับความสำคัญ passphrase
+  - **ตรวจตามกฎ:** `sovereign-origin` (ส่วน A) สถานะสะอาด (git status ว่าง) · ไร้ secret/passphrase หลุดลง diff · vault format ไม่เปลี่ยน (Argon2id + AES-256-GCM คงเดิม) · keychain เก็บแค่ passphrase เท่านั้น
+  - **ปลายทางต่อยอด:** ผู้ใช้ desktop (sovereign-origin) ล็อกอิน OS แล้วใช้ vault ทุกอันต่อได้ทันที — automation ยังใช้ env var ได้เหมือนเดิม · คิวถัดไป: ดูตาราง Q (ชั้น 2️⃣)
 
 ---
 
