@@ -100,7 +100,8 @@ test('kem-stream: โจมตีจับได้ทุกชนิด — แ
   // (d) แก้ค่าสายท้าย — ค่าที่ผู้เปิด/ผู้ตรวจคำนวณเองไม่ตรงที่ประกาศ = แฟ้มถูกแก้แน่นอน
   const d = lines.slice();
   const f2 = JSON.parse(d[5]);
-  f2.chain_sha256 = 'ff' + f2.chain_sha256.slice(2);
+  // เลือกไบต์นำที่ "ต่างจากเดิมแน่นอน" — ของเดิมอาจเริ่มด้วย ff อยู่แล้ว (เดิมเทสล้มแบบสุ่ม 1/256)
+  f2.chain_sha256 = (f2.chain_sha256.slice(0, 2) === 'ff' ? '00' : 'ff') + f2.chain_sha256.slice(2);
   d[5] = JSON.stringify(f2);
   saveLines(sealPath, d);
   assert.throws(() => verifyStreamChain(sealPath), /สาย hash/);

@@ -150,7 +150,9 @@ export function verifyAccountingSignatures(lines) {
   for (const l of lines || []) {
     if (!l || l.line !== 'doc' || !l.receipt) continue;
     const v = verifyReceipt(l.receipt);
-    checked.push({ seq: l.seq, receipt_id: l.receipt_id, valid: v.valid, ed25519: v.ed25519, ml_dsa44: v.ml_dsa44, slh_dsa128s: v.slh_dsa128s });
+    // ชั้น SLH แสดงตามรุ่นที่ใบประกาศเอง (128s/128f) — ใบสองชั้นไม่มีฟิลด์นี้
+    const slhField = v.slh_layer || null;
+    checked.push({ seq: l.seq, receipt_id: l.receipt_id, valid: v.valid, ed25519: v.ed25519, ml_dsa44: v.ml_dsa44, ...(slhField ? { slh_layer: slhField, [slhField]: v[slhField] } : {}) });
     if (!v.valid) invalid.push({ seq: l.seq, receipt_id: l.receipt_id, problems: v.problems });
   }
   return { checked, invalid };

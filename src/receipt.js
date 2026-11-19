@@ -1,15 +1,16 @@
-// ใบเสร็จสองลายเซ็นตามโปรไฟล์:  Ed25519 + ML-DSA-44 (เดิม · FIPS 204) และเมื่อโปรไฟล์สามชั้นเพิ่ม SLH-DSA-128s (FIPS 205)
+// ใบเสร็จสองลายเซ็นตามโปรไฟล์:  Ed25519 + ML-DSA-44 (เดิม · FIPS 204) และเมื่อโปรไฟล์สามชั้นเพิ่ม SLH-DSA (FIPS 205 · 128s หรือ 128f)
 // หลัก: verify ต้องผ่าน "ทุกชั้นของโปรไฟล์" ถึงนับว่ารายการสมบูรณ์ — ขาดตัวใดตัวหนึ่งไม่ตอบรับ
 import { ml_dsa44 } from '@noble/post-quantum/ml-dsa.js';
-import { slh_dsa_shake_128s } from '@noble/post-quantum/slh-dsa.js';
 import { canonical, newReceiptId, enc } from './util.js';
-import { ALG_PROFILE, ALG_PROFILE_SLH, ML_DSA_PK_LEN, SLH_PK_LEN } from './identity.js';
+import { ALG_PROFILE, ALG_PROFILE_SLH, ALG_PROFILE_SLH_FAST, ML_DSA_PK_LEN, slhVariantForProfile } from './identity.js';
 import { edSign, edVerifyB64, readEdPriv } from './ed25519.js';
 
 // ลายเซ็น ML-DSA/SLH-DSA ใช้ context (domain separation) เดียวกันแยกใช้งานจากคนอื่น
 const PQ_CONTEXT = enc.encode('sovereign-pq-receipt/v1');
 // โปรไฟล์ลายเซ็นอยู่ที่เดียว (identity.js) — re-export ให้คงรูป API เดิมของ receipt.js
-export { ALG_PROFILE, ALG_PROFILE_SLH } from './identity.js';
+export { ALG_PROFILE, ALG_PROFILE_SLH, ALG_PROFILE_SLH_FAST } from './identity.js';
+// รุ่น SLH ที่ตรวจพบในใบ (null = ใบสองชั้น) — ให้ผู้เรียกอ่านชื่อชั้นได้โดยไม่ต้องเดา
+export { slhVariantForProfile };
 
 // bytes ที่ถูกเซ็น = canonical JSON ของแกน (id/issued_at/payload/alg_profile) ตัดลายเซ็นออก
 export function coreBytes(envelope) {
@@ -18,7 +19,7 @@ export function coreBytes(envelope) {
 }
 
 export function signReceipt(identity, payload, { issued_at } = {}) {
-  const triple = identity.alg_profile === ALG_PROFILE_SLH;
+  const slhVariant = slhVariantForProfile(identity.alg_profile);
   const envelope = {
     id: newReceiptId(),
     issued_at: issued_at || new Date().toISOString(),
@@ -38,11 +39,13 @@ export function signReceipt(identity, payload, { issued_at } = {}) {
     ml_dsa44: { pk_b64: identity.keys.ml_dsa44.pk_b64, sig_b64: Buffer.from(pqSig).toString('base64') },
   };
 
-  // 3) SLH-DSA-128s (FIPS 205) — ชั้นเสริมของโปรไฟล์สามชั้น เซ็น bytes แกนเดียวกัน ผูกโดเมนเดียวกัน
-  if (triple) {
-    const slhSig = slh_dsa_shake_128s.sign(bytes, Buffer.from(identity.keys.slh_dsa128s.sk_b64, 'base64'), { context: PQ_CONTEXT });
-    envelope.signatures.slh_dsa128s = {
-      pk_b64: identity.keys.slh_dsa128s.pk_b64,
+  // 3) SLH-DSA ชั้นเสริมของโปรไฟล์สามชั้น (128s หรือ 128f ตาม alg_profile) — เซ็น bytes แกนเดียวกัน ผูกโดเมนเดียวกัน
+  if (slhVariant) {
+    const slhKeys = identity.keys[slhVariant.keyField];
+    if (!slhKeys?.sk_b64) throw new Error(`ตัวตนโปรไฟล์ ${identity.alg_profile} ขาดกุญแจ ${slhVariant.keyField}`);
+    const slhSig = slhVariant.impl.sign(bytes, Buffer.from(slhKeys.sk_b64, 'base64'), { context: PQ_CONTEXT });
+    envelope.signatures[slhVariant.keyField] = {
+      pk_b64: slhKeys.pk_b64,
       sig_b64: Buffer.from(slhSig).toString('base64'),
     };
   }
@@ -56,9 +59,12 @@ export function verifyReceipt(envelope) {
     out.problems.push('แกนของใบเสร็จขาด (id/issued_at/payload)');
     return out;
   }
-  const triple = envelope.alg_profile === ALG_PROFILE_SLH;
-  if (triple) out.slh_dsa128s = false; // แสดงชั้นเสริมตามโปรไฟล์ของใบเสร็จ
-  if (envelope.alg_profile && envelope.alg_profile !== ALG_PROFILE && !triple) out.problems.push('alg_profile ไม่ตรงระบบนี้');
+  const slhVariant = slhVariantForProfile(envelope.alg_profile);
+  if (slhVariant) {
+    out[slhVariant.keyField] = false; // แสดงชั้นเสริมตามโปรไฟล์ของใบเสร็จ
+    out.slh_layer = slhVariant.keyField;
+  }
+  if (envelope.alg_profile && envelope.alg_profile !== ALG_PROFILE && !slhVariant) out.problems.push('alg_profile ไม่ตรงระบบนี้');
 
   const bytes = coreBytes(envelope);
   const sigs = envelope.signatures || {};
@@ -88,23 +94,26 @@ export function verifyReceipt(envelope) {
     } catch (e) { out.problems.push('ML-DSA ตรวจไม่สำเร็จ: ' + e.message); }
   }
 
-  // 3) SLH-DSA-128s — เมื่อใบเป็นโปรไฟล์สามชั้น ต้องมีและผ่านด้วย (ขาด = ใบไม่สมบูรณ์)
-  if (triple) {
-    if (!sigs.slh_dsa128s?.pk_b64 || !sigs.slh_dsa128s?.sig_b64) {
-      out.problems.push('ไม่มีลายเซ็น SLH-DSA-128s');
+  // 3) SLH-DSA — เมื่อใบเป็นโปรไฟล์สามชั้น ต้องมีและผ่านด้วย (ขาด = ใบไม่สมบูรณ์)
+  // ผู้ตรวจเลือกรุ่นจาก alg_profile ในใบเอง ไม่มีตารางตายตัว — ใบ 128s เก่ายังตรวจด้วยอิมพลีเมนต์เดิมเสมอ
+  if (slhVariant) {
+    const layer = sigs[slhVariant.keyField];
+    if (!layer?.pk_b64 || !layer?.sig_b64) {
+      out.problems.push(`ไม่มีลายเซ็น ${slhVariant.label}`);
     } else {
       try {
-        const pk = Buffer.from(sigs.slh_dsa128s.pk_b64, 'base64');
-        if (pk.length !== SLH_PK_LEN) {
-          out.problems.push(`SLH-DSA pk ความยาว ${pk.length} ≠ ${SLH_PK_LEN}`);
+        const pk = Buffer.from(layer.pk_b64, 'base64');
+        if (pk.length !== slhVariant.impl.lengths.publicKey) {
+          out.problems.push(`${slhVariant.label} pk ความยาว ${pk.length} ≠ ${slhVariant.impl.lengths.publicKey}`);
         } else {
-          out.slh_dsa128s = slh_dsa_shake_128s.verify(Buffer.from(sigs.slh_dsa128s.sig_b64, 'base64'), bytes, pk, { context: PQ_CONTEXT });
-          if (!out.slh_dsa128s) out.problems.push('ลายเซ็น SLH-DSA-128s ไม่ตรงข้อมูล');
+          out[slhVariant.keyField] = slhVariant.impl.verify(Buffer.from(layer.sig_b64, 'base64'), bytes, pk, { context: PQ_CONTEXT });
+          if (!out[slhVariant.keyField]) out.problems.push(`ลายเซ็น ${slhVariant.label} ไม่ตรงข้อมูล`);
         }
-      } catch (e) { out.problems.push('SLH-DSA ตรวจไม่สำเร็จ: ' + e.message); }
+      } catch (e) { out.problems.push(`${slhVariant.label} ตรวจไม่สำเร็จ: ` + e.message); }
     }
   }
 
-  out.valid = out.ed25519 === true && out.ml_dsa44 === true && (triple ? out.slh_dsa128s === true : true);
+  const slhOk = slhVariant ? out[slhVariant.keyField] === true : true;
+  out.valid = out.ed25519 === true && out.ml_dsa44 === true && slhOk;
   return out;
 }

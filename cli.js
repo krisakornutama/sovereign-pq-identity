@@ -3,12 +3,14 @@
 // กุญแจจริงถูกเก็บใน Vault เข้ารหัส Argon2id + AES-256-GCM โดยดั้งเดิม
 import fs from 'node:fs';
 import path from 'node:path';
-import { createIdentity, loadIdentity, publicView } from './src/identity.js';
+import { createIdentity, loadIdentity, publicView, SLH_VARIANTS } from './src/identity.js';
 import { signReceipt, verifyReceipt } from './src/receipt.js';
+import { rotateIdentity, identityAgeDays, appendAnchor, loadAnchors } from './src/rotate.js';
 import { appendReceipt, listReceipts } from './src/ledger.js';
 import { buildAccountingExport, verifyAccountingExport, verifyAccountingSignatures, parseAccountingExport } from './src/accounting.js';
 import { createVault, openVault, vaultSummary } from './src/vault.js';
-import { readPassphrase, passphraseFromEnv, storePassphraseInKeychain, deletePassphraseFromKeychain, listKeychainPassphrases, isKeychainAvailable } from './src/password.js';
+import { readPassphrase, passphraseFromEnv, storePassphraseInKeychain, deletePassphraseFromKeychain, listKeychainPassphrases } from './src/password.js';
+import { isKeychainAvailable } from './src/keychain.js';
 import { canonical, sha256Hex } from './src/util.js';
 import { loadPoseidon, buildTree, pathFor, newMemberSecret, MERKLE_DEPTH, DEEP_DEPTH, capacityFromRootFile, depthFromRootFile } from './src/merkle.js';
 import { proveMembership, verifyMembership, anonReceipt, loadNullifierLedger, isNullifierSpent, appendNullifier, proveBalance, verifyBalance, balanceReceipt, membershipArtifactsFor, balanceArtifactsFor, artifactsReadyFor, circuitNameFor, parseCircuitName, vkeyPathForCircuit } from './src/zk.js';
@@ -113,8 +115,9 @@ function showVerify(v) {
   const mark = (b) => (b ? C.g('✓ ผ่าน') : C.r('✗ ไม่ผ่าน'));
   console.log(`  Ed25519   : ${mark(v.ed25519)}`);
   console.log(`  ML-DSA-44 : ${mark(v.ml_dsa44)}`);
-  if (v.slh_dsa128s !== undefined) console.log(`  SLH-DSA   : ${mark(v.slh_dsa128s)}`);
-  const layers = v.slh_dsa128s === undefined ? 'ทั้งสองลายเซ็น' : 'ลายเซ็นครบสามชั้น';
+  const slhLabel = v.slh_layer && SLH_VARIANTS[v.slh_layer] ? SLH_VARIANTS[v.slh_layer].label : null;
+  if (slhLabel) console.log(`  SLH-DSA   : ${mark(v[v.slh_layer])}` + C.dim('  (' + slhLabel + ')'));
+  const layers = slhLabel ? 'ลายเซ็นครบสามชั้น' : 'ทั้งสองลายเซ็น';
   console.log(`  สรุป      : ${v.valid ? C.g('✓ ใบเสร็จถูกต้อง (' + layers + 'ตรวจผ่าน)') : C.r('✗ ใบเสร็จไม่สมบูรณ์')}`);
   for (const p of v.problems) console.log(C.dim('    • ' + p));
 }
@@ -125,20 +128,22 @@ function writeVaultFile(identity, passphrase) {
 }
 
 if (cmd === 'keygen') {
+  const slhFastFlag = rest.includes('--slh-fast');
   const slhFlag = rest.includes('--slh');
-  const labelWords = rest.filter((a) => a !== '--slh');
+  const withSlh = slhFastFlag ? 'slh_dsa128f' : (slhFlag ? true : false);
+  const labelWords = rest.filter((a) => a !== '--slh' && a !== '--slh-fast');
   const label = labelWords.join(' ') || 'sovereign';
   if (fs.existsSync(VAULT) || fs.existsSync(IDENT)) {
     console.error(C.r('ตัวตนมีอยู่แล้ว — ลบแฟ้มเดิมก่อนถ้าตั้งใจสร้างใหม่ (ระวัง: กุญแจเดิมจะหาย — ถ้าแค่ต้องการเปลี่ยนกุญแจ ใช้ node cli.js rotate แทน)'));
     process.exit(1);
   }
-  console.log(slhFlag
-    ? 'สร้างกุญแจ **สามชั้น** Ed25519 + ML-DSA-44 (FIPS 204) + SLH-DSA-128s (FIPS 205) แล้วเก็บเข้า Vault เข้ารหัส'
-    : 'สร้างกุญแจคู่ Ed25519 + ML-DSA-44 แล้วเก็บเข้า Vault เข้ารหัส' + C.dim('  (อยากได้ชั้นที่สาม: เพิ่ม --slh)'));
+  console.log(withSlh
+    ? 'สร้างกุญแจ **สามชั้น** Ed25519 + ML-DSA-44 (FIPS 204) + ' + (slhFastFlag ? 'SLH-DSA-128f (เร็ว)' : 'SLH-DSA-128s') + ' แล้วเก็บเข้า Vault เข้ารหัส'
+    : 'สร้างกุญแจคู่ Ed25519 + ML-DSA-44 แล้วเก็บเข้า Vault เข้ารหัส' + C.dim('  (อยากได้ชั้นที่สาม: เพิ่ม --slh = 128s ลายเซ็นเล็ก / --slh-fast = 128f เซ็นเร็ว ~20 เท่า)'));
   console.log(C.dim('(จำ passphrase ให้ดี — ลืมแล้วอ่านกุญแจกลับไม่ได้)'));
   fs.mkdirSync('data', { recursive: true });
   const passphrase = await getPassphrase(true);
-  const id = createIdentity({ label, withSlh: slhFlag });
+  const id = createIdentity({ label, withSlh });
   writeVaultFile(id, passphrase);
   console.log(C.g('✓ กุญแจสร้างเสร็จ + เก็บใน vault: ' + VAULT));
   console.log('  หมายเลขตัวตนนิรนาม: ' + C.b(id.id) + C.dim('  (ไม่ผูกชื่อจริง — อ้างหมายเลขนี้อย่างเดียว)'));
@@ -147,7 +152,9 @@ if (cmd === 'keygen') {
   console.log(C.y('  ⚠ passphrase ไม่ถูกบันทึกที่ไหน: ลืม = ไม่มีทางกู้คืน'));
 } else if (cmd === 'rotate') {
   // หมุนกุญแจ — เกิดกุญแจใหม่ใน vault เดิม · ลงสายสกุลกุญแจสาธารณะ · ใบเสร็จเก่ายังตรวจได้เพราะ pk ฝังในใบเอง
+  const slhFastFlag = rest.includes('--slh-fast');
   const slhFlag = rest.includes('--slh');
+  const withSlh = slhFastFlag ? 'slh_dsa128f' : (slhFlag ? true : false);
   const dueIdx = rest.indexOf('--if-due');
   let dueDays = null;
   if (dueIdx >= 0) {
@@ -163,12 +170,12 @@ if (cmd === 'keygen') {
     process.exit(0);
   }
   const passphrase = await getPassphrase(false);
-  const { next, anchor } = rotateIdentity(current, { withSlh: slhFlag });
+  const { next, anchor } = rotateIdentity(current, { withSlh });
   appendAnchor(ANCHORS, anchor);
   writeVaultFile(next, passphrase); // แฟ้มเดิมถูกเขียนทับด้วยตัวตนใหม่ในชั้นเหล็ก — passphrase เดิมใช้ต่อได้
   console.log(C.g('✓ หมุนกุญแจสำเร็จ — ตัวตนใหม่: ' + C.b(next.id)));
   console.log('  สายสกุล   : ' + anchor.id_old + ' → ' + anchor.id_new + C.dim('  (ลง ' + ANCHORS + ' แล้ว — กุญแจสาธารณะที่ปลดอายุเท่านั้น ไม่มีกุญแจลับ)'));
-  console.log('  โปรไฟล์  : ' + anchor.alg_profile_old + ' → ' + anchor.alg_profile_new + (slhFlag && anchor.alg_profile_old !== anchor.alg_profile_new ? C.dim('  (อัปเกรดเพิ่มชั้น SLH-DSA)') : ''));
+  console.log('  โปรไฟล์  : ' + anchor.alg_profile_old + ' → ' + anchor.alg_profile_new + (withSlh && anchor.alg_profile_old !== anchor.alg_profile_new ? C.dim('  (อัปเกรดเพิ่มชั้น SLH-DSA)') : ''));
   console.log(C.dim('  ใบเสร็จเก่าทุกใบยังตรวจผ่านได้ตามเดิม — ตรวจสอบอยู่ในตัวใบเสร็จเอง (pk ฝังคู่ลายเซ็น)'));
   console.log(C.dim('  ระวังจุดเปลี่ยน: คำสั่งที่ถอด vault ต่อจากนี้ใช้ passphrase เดิมกับกุญแจใหม่ทั้งชุด'));
 } else if (cmd === 'anchors') {
@@ -193,7 +200,7 @@ if (cmd === 'keygen') {
   appendReceipt(LEDGER, env);
   const v = verifyReceipt(env);
   const keyNote = source === 'plain' ? '' : ' (กุญแจถอดออกจาก vault ในหน่วยความจำเท่านั้น)';
-  const layerWord = id.keys.slh_dsa128s ? 'สามลายเซ็น' : 'สองลายเซ็น';
+  const layerWord = Object.keys(id.keys).some((k) => k.startsWith('slh_')) ? 'สามลายเซ็น' : 'สองลายเซ็น';
   console.log(C.g('สร้างใบเสร็จสาธิต + เซ็น' + layerWord + 'แล้ว' + keyNote));
   console.log('  ตัวตน     : ' + C.b(id.id) + C.dim(' (' + id.alg_profile + ')'));
   console.log('  หมายเลขใบ: ' + C.b(env.id));
@@ -388,9 +395,10 @@ if (cmd === 'keygen') {
   กุญแจ (ครั้งแรก):
   node cli.js keygen "ชื่อเรียกเครื่อง"      สร้างตัวตน Ed25519 + ML-DSA-44 + Vault เข้ารหัส Argon2id
   node cli.js keygen --slh "ชื่อเรียกเครื่อง" เหมือนบรรทัดบน + ลายเซ็นชั้นที่สาม SLH-DSA-128s (FIPS 205)
+  node cli.js keygen --slh-fast "ชื่อเรียกเครื่อง"  ชั้นที่สามรุ่นเร็ว SLH-DSA-128f — เซ็น ~1.2 วิ (แลกกับลายเซ็น 17 KB · Q-05)
 
   ใช้งานประจำ:
-  node cli.js demo                          จำลองขาย → เซ็นตามโปรไฟล์ (สองชั้น หรือสามชั้นเมื่อ --slh) → ตรวจ → ลงคลัง
+  node cli.js demo                          จำลองขาย → เซ็นตามโปรไฟล์ (สองชั้น หรือสามชั้นเมื่อ --slh/--slh-fast) → ตรวจ → ลงคลัง
   node cli.js verify <แฟ้มใบเสร็จ.json>     ตรวจใบเสร็จ (exit 0 เมื่อผ่านครบทุกชั้น)
   node cli.js ledger                        อ่านคลังใบเสร็จในเครื่อง + ตรวจแต่ละใบ
   node cli.js ledger export [แฟ้มออก]       คลัง → เอกสารบัญชี JSONL (สาย hash + ฝังซองลายเซ็นครบ · v2.0 · Q-08)
@@ -398,7 +406,7 @@ if (cmd === 'keygen') {
   node cli.js selftest                      ทดสอบตัวเอง 7 เคส (ข้อมูลสาธิตล้วน)
 
   หมุนเวียนกุญแจ:
-  node cli.js rotate [--slh] [--if-due <วัน>]  เกิดกุญแจใหม่แทนชุดเดิม + ลงสายสกุลกุญแจสาธารณะ (ใบเสร็จเก่ายังตรวจได้)
+  node cli.js rotate [--slh|--slh-fast] [--if-due <วัน>]  เกิดกุญแจใหม่แทนชุดเดิม + ลงสายสกุลกุญแจสาธารณะ (ใบเสร็จเก่ายังตรวจได้)
   node cli.js anchors                          อ่านสายสกุลกุญแจที่ปลดอายุแล้ว (สาธารณะล้วน)
 
   vault:
@@ -588,7 +596,8 @@ async function zkNamespace(rest) {
   } else if (sub === 'prove') {
     const { rest: pRest, value: sealTo } = extractFlag(rest, '--seal-to');
     const label = pRest[1] || '';
-    if (!label) { console.error(C.r('ใช้งาน: node cli.js zk prove "ชื่อสมาชิก" [epoch=YYYYMMDD] [--seal-to <kem-pub.json>]')); process.exit(1); }
+    if (!label) { console.error(C.r('ใช้งาน: node cli.js zk prove "ชื่อสมาชิก" [epoch=YYYYMMDD] [--seal-to <kem-pub.json>] [--keychain]')); process.exit(1); }
+    const useKeychain = pRest.includes('--keychain');
     const epoch = pRest[2] ? Number(pRest[2]) : todayEpoch();
     if (!fs.existsSync('data/members_root.json')) { console.error(C.r('ยังไม่มี data/members_root.json — รัน: node cli.js zk tree')); process.exit(1); }
     const rootFile = JSON.parse(fs.readFileSync('data/members_root.json', 'utf8'));
@@ -1059,7 +1068,7 @@ async function kemNamespace(rest) {
     const t0 = performance.now();
     const { pk_b64, sk_b64, pk_sha256 } = kemKeygen();
     const ms = (performance.now() - t0).toFixed(1);
-    const passphrase = await askKemPassphrase(true);
+    const passphrase = await askKemPassphrase(true, { useKeychain: rest.includes('--keychain') });
     fs.mkdirSync('data', { recursive: true });
     fs.writeFileSync(KVAULT, JSON.stringify(createVault({ profile: KEM_PROFILE, label, sk_b64 }, passphrase), null, 2));
     openVault(JSON.parse(fs.readFileSync(KVAULT, 'utf8')), passphrase); // ตรวจว่า vault เปิดกลับได้จริงก่อนอวยวัด

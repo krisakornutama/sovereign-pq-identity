@@ -4,7 +4,7 @@
 // แฟ้ม anchors เก็บแต่กุญแจสาธารณะล้วน (ไม่มี sk) — data/ ทั้งหมดอยู่นอก git
 import fs from 'node:fs';
 import nodePath from 'node:path';
-import { createIdentity, publicView } from './identity.js';
+import { createIdentity, publicView, slhVariantForProfile } from './identity.js';
 
 // อายุตัวตนเป็นจำนวนวันเต็ม — คำนวณจากเวลาจริงของเครื่อง (created_at เป็น ISO เสมอ)
 export function identityAgeDays(identity, now = new Date()) {
@@ -13,12 +13,14 @@ export function identityAgeDays(identity, now = new Date()) {
   return Math.floor((now.getTime() - born.getTime()) / 86_400_000);
 }
 
-// หมุนกุญแจ: สร้างตัวตนใหม่ (withSlh = เพิ่มชั้น SLH-DSA ขึ้นเป็นโปรไฟล์สามชั้น) + รายการปลดอายุของกุญแจเก่า
+// หมุนกุญแจ: สร้างตัวตนใหม่ (withSlh = เพิ่มชั้น SLH-DSA ขึ้นเป็นโปรไฟล์สามชั้น — true = 128s, หรือชื่อรุ่น เช่น 'slh_dsa128f') + รายการปลดอายุของกุญแจเก่า
 // คืน { next, anchor } — ผู้เรียกบันทึก vault ใหม่และแนบ anchor ลงแฟ้มสายสกุลเอง (ฟังก์ชันนี้ไม่แตะแฟ้ม)
 export function rotateIdentity(oldIdentity, { withSlh = false, now = new Date() } = {}) {
   if (!oldIdentity || !oldIdentity.id) throw new Error('ตัวตนเดิมไม่ครบ (ไม่มี id) — หมุนกุญแจไม่ได้');
   const next = createIdentity({ label: oldIdentity.label, withSlh });
   const pksOld = publicView(oldIdentity);
+  const slhOld = slhVariantForProfile(oldIdentity.alg_profile);
+  const oldSlhField = slhOld ? slhOld.keyField + '_pk_b64' : null;
   const anchor = {
     id_old: oldIdentity.id,
     id_new: next.id,
@@ -27,7 +29,7 @@ export function rotateIdentity(oldIdentity, { withSlh = false, now = new Date() 
     pks_old: {
       ed25519_pk_b64: pksOld.ed25519_pk_b64,
       ml_dsa44_pk_b64: pksOld.ml_dsa44_pk_b64,
-      ...(pksOld.slh_dsa128s_pk_b64 ? { slh_dsa128s_pk_b64: pksOld.slh_dsa128s_pk_b64 } : {}),
+      ...(oldSlhField && pksOld[oldSlhField] ? { [oldSlhField]: pksOld[oldSlhField] } : {}),
     },
     old_created_at: oldIdentity.created_at,
     retired_at: now.toISOString(),

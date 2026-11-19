@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { createIdentity, ALG_PROFILE, ALG_PROFILE_SLH } from '../src/identity.js';
+import { createIdentity, loadIdentity, publicView, ALG_PROFILE, ALG_PROFILE_SLH, ALG_PROFILE_SLH_FAST } from '../src/identity.js';
 import { signReceipt, verifyReceipt, coreBytes } from '../src/receipt.js';
 import { rotateIdentity, identityAgeDays, appendAnchor, loadAnchors } from '../src/rotate.js';
 import { canonical } from '../src/util.js';
@@ -177,4 +177,56 @@ test('v1.4: อายุตัวตนคำนวณตรง (วันเต
   assert.equal(identityAgeDays(aged, now), 92);
   assert.equal(identityAgeDays(aged, now) >= 90, true);  // เกตจะผ่านเงื่อนไข --if-due 90
   assert.throws(() => identityAgeDays(broken, now));     // ไม่มีวันเกิด = ห้ามเดาอายุ
+});
+
+// ==== v2.4 (Q-05): โปรไฟล์ SLH-DSA-128f — ชั้นที่สามรุ่นเร็ว (ลายเซ็นใหญ่กว่า 128s) ====
+
+test('Q-05: withSlh:"slh_dsa128f" → โปรไฟล์ 128f · กุญแจยาวเท่า 128s (pk 32 B sk 64 B) · id ต่างจาก 128s', () => {
+  const fast = createIdentity({ label: 't-128f', withSlh: 'slh_dsa128f' });
+  assert.equal(fast.alg_profile, ALG_PROFILE_SLH_FAST);
+  assert.equal(fast.keys.slh_dsa128f === undefined, false);
+  assert.equal(fast.keys.slh_dsa128s, undefined);        // ไม่มีกุญแจรุ่นอื่นปนในตัวตนเดียว
+  assert.equal(Buffer.from(fast.keys.slh_dsa128f.pk_b64, 'base64').length, 32);
+  assert.equal(Buffer.from(fast.keys.slh_dsa128f.sk_b64, 'base64').length, 64);
+  assert.equal(loadIdentity(fast).id, fast.id);          // ผ่านการตรวจความยาวกุญแจตามโปรไฟล์
+  assert.equal(publicView(fast).slh_dsa128f_pk_b64, fast.keys.slh_dsa128f.pk_b64);
+  assert.equal(publicView(fast).slh_dsa128s_pk_b64, undefined);
+});
+
+test('Q-05: ใบเสร็จ 128f → ผ่านครบสามชั้น · ลายเซ็น 17,088 B · ไม่ปนกับใบ 128s', () => {
+  const fast = createIdentity({ label: 't-128f-sign', withSlh: 'slh_dsa128f' });
+  const env = signReceipt(fast, { demo: true, total_thb: 88 });
+  assert.equal(env.alg_profile, ALG_PROFILE_SLH_FAST);
+  assert.equal(Buffer.from(env.signatures.slh_dsa128f.sig_b64, 'base64').length, 17088);
+  assert.equal(env.signatures.slh_dsa128s, undefined);
+  const v = verifyReceipt(env);
+  assert.equal(v.valid, true);
+  assert.equal(v.slh_layer, 'slh_dsa128f');
+  assert.equal(v.slh_dsa128f, true);
+});
+
+test('Q-05: สลับชั้น SLH ข้ามรุ่น (ใบ 128f แปะลายเซ็น 128s) → ไม่ผ่าน', () => {
+  const fast = createIdentity({ label: 't-128f-mix', withSlh: 'slh_dsa128f' });
+  const slow = createIdentity({ label: 't-128s-mix', withSlh: true });
+  const envF = signReceipt(fast, { n: 1 });
+  const envS = signReceipt(slow, { n: 1 });
+  const mixed = JSON.parse(JSON.stringify(envF));
+  delete mixed.signatures.slh_dsa128f;
+  mixed.signatures.slh_dsa128s = envS.signatures.slh_dsa128s; // รุ่นผิด + กุญแจผิด
+  const v = verifyReceipt(mixed);
+  assert.equal(v.valid, false);
+  assert.equal(v.slh_dsa128f, false);
+  assert.equal(v.problems.some((p) => p.includes('128f')), true);
+});
+
+test('Q-05: ใบ 128s เดิมยังตรวจด้วยอิมพลีเมนต์เดิม (ย้อนเข้ากันได้) · loadIdentity ปฏิเสธโปรไฟล์แปลก', () => {
+  const slow = createIdentity({ label: 't-128s-compat', withSlh: true });
+  const env = signReceipt(slow, { demo: true });
+  const v = verifyReceipt(env);
+  assert.equal(v.valid, true);
+  assert.equal(v.slh_layer, 'slh_dsa128s');
+  assert.equal(v.slh_dsa128s, true);
+  const tampered = JSON.parse(JSON.stringify(slow));
+  tampered.alg_profile = 'sovereign.ed25519+ml_dsa44+slh_dsa999x.v1';
+  assert.throws(() => loadIdentity(tampered), /alg_profile/);
 });

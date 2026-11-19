@@ -1,6 +1,6 @@
 {
   "name": "sovereign-pq-identity",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "description": "Post-Quantum Identity for Sovereign OS — pseudonymous identity + dual-signed receipts (Ed25519 + ML-DSA-44, FIPS 204) + optional third layer SLH-DSA (FIPS 205) with key rotation + ZK-SNARK proofs (anonymous membership & balance threshold, Groth16) + real multi-machine Groth16 ceremonies (hash-chained ceremony sheet, verified cross-machine) + ML-KEM (FIPS 203) hybrid envelopes as the standard sealed file transport between nodes, with chunked streaming seals for very large files + stable accounting ledger export (hash-chained JSONL with embedded full receipts, verifiable without keys) + static web verifier page (browser-only receipt & accounting-chain verification, vendor @noble pure JS). Offline-first, zero cloud.",
   "main": "cli.js",
   "type": "module",
